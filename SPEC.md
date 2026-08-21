@@ -777,60 +777,79 @@ everyone derives from, rather than four repos independently pinning from their o
 That is the strongest argument for §5 existing at all, and it came out of them declining to
 overclaim what they had shipped.
 
-### The client DOM — MEASURED for React, still open for Svelte
+### The client DOM — MEASURED for React and Svelte. Open question #2 is CLOSED.
 
-**[VERIFIED]** by the React owner in jsdom 29 + React 19.2.7, running `tokenizeElement` and
-`generateCustomId` **lifted unmodified from the installed `dist/index.js`** — the shipped
-tokenizer over real DOM states, not a reimplementation of it.
+React's half is in the table below. Svelte's was measured by the **reference deployment** against
+production plus a purpose-built harness — real `svelte@5.55.7` compiler, real `render()` from
+`svelte/server`, real `hydrate()`, real browser, and `tokenizeElement`/`generateCustomId` imported
+**unmodified from the published `0.6.5`** (they are public exports; no bundle patching needed).
 
-For `<span>Hello {name}!<br/><b>bold</b></span>`:
+**The prediction was wrong, and in the favourable direction. Svelte 5 presents ONE text node.**
+
+| case | content | ssr nodes | hyd nodes | id match |
+|---|---|---|---|---|
+| c1 | `Hello {name} world, you have {n} items` | 1 | 1 | ✅ |
+| c2 | `{a} {b}` | 1 | 1 | ✅ |
+| c3 | `lead {name}<em>emph</em>{n} tail` | 2 | 2 | ✅ |
+| c4 | static control | 1 | 1 | ✅ |
+
+Identical arity, identical tokens, byte-identical `custom_id`, no hydration warnings. Confirmed on
+production and confirmed reactive: after a state change the node is **mutated, not replaced** —
+`sameObject=true`, Svelte 5 calls `set_text`; there is no `splitText` in the path.
+
+**Three-text-nodes is correct Svelte 4 behaviour.** Say "Svelte 5" explicitly in the adapter.
+
+**Correction: Svelte does emit separator comments.** The earlier claim that it emits none was
+wrong. Svelte 5 emits `<!---->` liberally around dynamic and component boundaries, in both served
+bytes and hydrated DOM — they simply contribute **no tokens**, because the walker steps over them
+structurally. The reason no comment sits *between* two interpolations in one run is not omission:
+**there is no boundary there to mark.** Nothing was lost, so a server tokenizer has nothing to
+recover.
+
+### The real divergence is VALUES, not structure — and it is the sharper hazard
+
+`custom_id` hashes token **text**, and interpolated values live inside that text. Same markup, same
+arity, different id:
 
 ```
-A. client-only render (createRoot)
-   nodes : text("Hello ") text("Bob") text("!") <br> <b>
-   tokens: ["Hello","Bob","!","bold"]        id 3e3e0a10…
-
-B. SSR renderToString -> HYDRATED live DOM
-   nodes : text("Hello ") comment(" ") text("Bob") comment(" ") text("!") <br> <b>
-   tokens: ["Hello","Bob","!","bold"]        id 3e3e0a10…
-
-C. renderToStaticMarkup -> parsed
-   nodes : text("Hello Bob!") <br> <b>
-   tokens: ["Hello Bob!","bold"]             id 9d499689…   DIFFERENT
-
-D. renderToString -> parsed
-   identical to B                            id 3e3e0a10…
-
-A === B  true      B === C  FALSE      B === D  true
+name='Sarah',    n=3     -> ["Hello Sarah world, you have 3 items"]      25364a5d…
+name='Wolfgang', n=1000  -> ["Hello Wolfgang world, you have 1000 items"] dc441178…
 ```
 
-Three results, one of which was not predictable:
+**And arity is safe from the renderer, not from the data.** A run of interpolations plus whitespace
+collapses to **zero tokens** when the values render empty, because whitespace-only text nodes are
+dropped:
 
-1. **Client-only and hydrated agree.** The separators do not perturb identity. Not guaranteed in
-   advance.
-2. **The `<!-- -->` comments survive hydration and live in the client DOM.** They are not a
-   transport artifact React cleans up. So the isomorphism is not merely "in the SSR string" — it
-   is in the DOM the walker actually traverses.
-3. **`renderToString` round-trips the React client DOM exactly**, and the "parse, do not regex"
-   correction is doing precisely the necessary work: a regex that strips comments merges the text
-   runs and lands on **C**, the wrong id.
+```
+{a} {b}   a='AA', b='BB'  -> ["AA BB"]  a32abe23…
+{a} {b}   a='',   b=''    -> []         f396abe8…    arity 1 -> 0
+```
 
-**Still [OPEN] for Svelte, and the prediction is not reassuring.** Svelte's captured text runs stay
-whole — `Hello {name} world` is **one** token server-side — but Svelte compiles interpolations to
-separate text nodes updated via `set_data`, which would make it **three on the client and one on
-the server**. That is React's problem in mirror image and **worse**, because Svelte emits no
-separator comments, so nothing records the boundary. **Prediction, not measurement** — flagged as
-such, and cheap to settle.
+The DOM holds one text node in both states.
 
-The harness generalizes in about twenty lines; only the render call is framework-specific. Run the
-framework's client render into jsdom, run the **real** `tokenizeElement` from the installed `dist`
-(append one export line to a *copy* of `dist/index.js` — the functions are module-internal but
-top-level in the bundle, so exposing them needs no logic change), and compare `custom_id` against
-the server path. The React owner has sent the recipe to the Svelte owner to settle in their repo.
+**This fires without any renderer disagreement** — whenever an interpolated value differs between
+server render and client render. A store empty during SSR and populated after hydration, data
+fetched client-side, anything time- or session-dependent. Ids quietly never match, the block
+registers twice, nothing errors.
 
-**Adopt this harness as the conformance suite's browser-side arm.** It is the only check that
-compares the two halves of `custom_id` identity, and §13's acceptance criteria should require it
-per adapter.
+**Scope:** `<Translate>` / content-block path only. **`<Phrase>` is immune** — `encodeRichText`
+produces a phrase string with no token array and no `custom_id`. Confirmed on production `<Phrase>`
+blocks: served and hydrated trees are structurally identical, only the text differs.
+
+### Adapter requirements that follow
+
+1. **Assume one text node per contiguous interpolated run** at SSR and after hydration. Svelte 5
+   only.
+2. **A server tokenizer is safe only on a subtree whose text runs are static.** If a `<Translate>`
+   subtree contains non-static interpolation, the server must render byte-identical values to the
+   client or the ids diverge.
+3. **Detect non-static interpolation and refuse, or warn — do not emit an id that will not match.**
+   This is the cheap guard, and it is the one that converts a silent re-key into a message.
+
+**[OPEN]** Three shapes not yet covered by the harness, offered by the reference deployment:
+`{#if}` inside a `<Translate>`, `{#each}`, and attribute interpolation. Worth requesting before the
+Svelte adapter is called done — `{#each}` in particular, since a list is the natural place someone
+reaches for a block wrapper.
 
 ### CORRECTION — do NOT strip comments. Parse them.
 

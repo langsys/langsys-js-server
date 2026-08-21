@@ -1,0 +1,76 @@
+/**
+ * Request-scoped resolution. Everything else in this package depends on it.
+ *
+ * The precise problem this solves is NOT "the base SDK's singleton is a bug" — it is
+ * **there is no request-scoped translator in the SDK.** A non-singleton class with
+ * module-global state races identically.
+ *
+ * Under a long-lived server one process serves every concurrent request, so seeding
+ * module globals server-side is a cross-request data race: an in-flight `/de` render
+ * can observe `/it`'s catalog. The race needs an `await` between write and read, which
+ * every async `load` function provides — so it is load-dependent and **cannot reproduce
+ * in development with one user.**
+ *
+ * `AsyncLocalStorage` rather than framework context because `t()` is legitimately
+ * called from `load` functions and plain utility modules that have no component
+ * context. Ambient scoping is a requirement, not a convenience.
+ *
+ * Available on Node >=16, Deno, Bun, and Cloudflare Workers with `nodejs_compat`.
+ */
+
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { Catalog, KeyType, MissingPhrase } from './types.js';
+import type { Logger } from './logger.js';
+
+export interface RequestScope {
+    locale: string;
+    /**
+     * The catalog this request renders against. Immutable for the request's lifetime —
+     * a mid-render refresh would let one page render two different catalog versions.
+     */
+    catalog: Catalog;
+    /** Request-scoped. A module-global queue would reintroduce the coupling this package exists to avoid. */
+    missQueue: MissingPhrase[];
+    /** Deduplication index for `missQueue`, so a page rendering the same miss 50 times posts it once. */
+    missSeen: Set<string>;
+    projectId: string | number;
+    keyType: KeyType;
+    baseLocale: string;
+    logger: Logger;
+    /** True once the response has flushed and the queue has been drained. */
+    drained: boolean;
+}
+
+/**
+ * NOTE: this is module-scoped, and that is correct — it is the ONLY way ambient
+ * scoping can work. `AsyncLocalStorage` itself holds no request data; it is a keyed
+ * accessor into per-async-context storage. The values it returns are per-request by
+ * construction, which is exactly the property the base SDK's module globals lack.
+ */
+const storage = new AsyncLocalStorage<RequestScope>();
+
+/** The current request's scope, or `undefined` outside one. */
+export function getScope(): RequestScope | undefined {
+    return storage.getStore();
+}
+
+/** Run `fn` with `scope` installed as the ambient request scope. */
+export function runInScope<T>(scope: RequestScope, fn: () => T): T {
+    return storage.run(scope, fn);
+}
+
+/**
+ * The message shown when a primitive is called outside a request scope.
+ *
+ * This does NOT throw. A server SDK that throws on a missing scope turns a translation
+ * problem into a 500, and the correct degraded behaviour — render the base language —
+ * is exactly what the caller gets anyway. But it must be LOUD: rendering base language
+ * silently is the original defect this whole package exists to correct, and it looks
+ * identical to a working page in every `curl`-shaped check.
+ */
+export const NO_SCOPE_MESSAGE =
+    't() was called outside a request scope, so it returned the base-language phrase ' +
+    'unchanged. Server-rendered HTML from this call site will NOT be translated. Wrap ' +
+    'the render in `langsys.run({ locale }, ...)` — see the README. This is silent in ' +
+    'the base locale and invisible in view-source, so it is warned about here rather ' +
+    'than discovered in production.';

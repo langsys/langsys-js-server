@@ -820,10 +820,47 @@ Flagged rather than merged, per the instruction. The owner's choice is not symme
   have today.
 - **Neither** — the divergence is documented and the hand-off keeps fragmenting.
 
-What *this package* should do meanwhile is not open: **implement the 15.** It is the
-JS-family sibling and §7's hand-off is to a JS client. Implementing 27 would make it agree
-with PHP and disagree with the client it hands off to on every single request — the worse
-trade, since the hand-off is a per-request event and PHP interop is a deployment-topology one.
+### DECIDED — converge on PHP's 27
+
+Darryl's call, 2026-08-21. **PHP's list is the contract. JS adopts the 12.** This package
+implements all **27**.
+
+That inverts the recommendation directly above, and the inversion is the point: "implement the
+15" was correct *while JS had 15*, because §7's hand-off is a per-request event and PHP interop
+is a deployment-topology one. Once the client family carries 27, the trade disappears —
+implementing 27 agrees with both.
+
+**Mechanically the convergence is clean, and that was checked rather than assumed**, because
+token order is `custom_id` identity. Read back from `langsys-php@v1.3.1`
+`src/Html/HtmlParser.php:26-60` and `langsys-js-typescript@0.6.5` `dist/index.mjs:1138`: the 15
+are identical *and in identical order*, and PHP's extra 12 sit in one contiguous block after
+them. So JS appends and **nothing already in the list moves.** Had PHP interleaved its extras,
+every block carrying any translatable attribute would have re-keyed instead of only those
+carrying one of the twelve.
+
+`value` continues to be emitted after the whole constant loop — then `<button>`, then
+`<input type=submit|button>` — which is already true in both and stays true with a longer list.
+
+**Sequencing, and it is a real dependency.** This package must not ship 27 before the client
+SDKs do, or it disagrees with its own hand-off partner on every request — the exact trade the
+paragraph above warned about, just pointed the other way. Either the base SDK ships the 12
+first, or this package pins a base-SDK version floor that guarantees them. **Do not treat the
+decision as permission to implement ahead of the dependency.**
+
+**[OPEN] — the migration, which is the real cost and is not this package's call.** A
+JS-registered block whose subtree carries any of the twelve changes `custom_id` when this ships,
+orphaning its catalog entry. `generateLegacyCustomId` is the precedent and the mechanism —
+lookup-only fallback under the old id — but it is already marked
+`@deprecated — will be removed once catalogs have been rebased`. Adding a second creates a chain
+of two, and a chain is harder to retire than either link. **Rebasing once may be cheaper than
+carrying a second fallback forever.**
+
+**One constraint this package should adopt regardless:** PHP's list is runtime-mutable via
+`setTranslatableAttributes()`, which makes `custom_id` a function of *configuration* rather than
+of content. **Do not expose a runtime setter here.** A server SDK whose id generation depends on
+host configuration reintroduces precisely the divergence this decision removes — and the
+conformance suite must pin the list explicitly for the same reason, or it certifies whatever the
+runner happened to be configured with and reports that as parity.
 
 ---
 
@@ -920,7 +957,7 @@ Do not begin building the affected section until these are resolved.
 | 4 | ~~Should registration be attempted under a read-only key?~~ **ANSWERED §6.** Refuse locally, return success, log unconditionally (the SDK's own precedent gates the log on `debug` — do not copy that). | §6 | base SDK ✅ |
 | 5 | Can client SDKs seed synchronously before hydration? **PARTIALLY ANSWERED §7** — the blocker is that `init()` seeds *after* `await validate()`, not the mount hook. A `seedCatalog()` export is proposed. Per-framework hydration timing is still open. | §7 | client SDKs |
 | 6 | ~~What should this package do about multi-worker cache inconsistency? What does PHP already do?~~ **ANSWERED §8 — the premise was wrong.** PHP has never had the problem: its memo is an instance property and FPM ends the request. The rule is "request-scoped memo, shared tier is the only cross-request tier", not "add Redis". Policy sub-question (a bust signal from the Translation Manager) stays open. | §8 | PHP ✅ |
-| 7 | Do the JS and PHP translatable-attribute lists match exactly? **ANSWERED §9 — no.** The 15 match exactly and in order; PHP carries **12 more**. This package implements the 15. The PHP↔JS divergence needs an owner's decision (converge either way = catalog migration). | §9 | PHP ✅ / Darryl |
+| 7 | ~~Do the JS and PHP attribute lists match?~~ **DECIDED 2026-08-21 — converge on PHP's 27.** The 15 are identical and in identical order; PHP's 12 append contiguously, so nothing already in the list moves. This package implements 27, but **not before the client SDKs do**. The migration stays open: JS blocks carrying any of the 12 re-key — second legacy generation, or rebase? | §9 | Darryl ✅ / base SDK |
 | 8 | `-server` or `-node`? | §11 | Darryl |
 | 9 | **NEW.** How does this package consume the base SDK's pure functions without importing its singleton graph — vendor-with-conformance-test, or request `sideEffects: false` + a `/pure` subpath export? | §3.1 | base SDK + this package |
 | 10 | ~~Does PHP's tokenizer retain `&nbsp;` (U+00A0)?~~ **ANSWERED §5 — yes, they diverge.** PHP normalises ASCII whitespace only; a bare `&nbsp;` text node is a token in PHP and absent in JS, so the token *count* differs. Which behaviour wins is a product decision, not an SDK one. | §5 | PHP ✅ / Darryl |

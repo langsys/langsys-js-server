@@ -548,18 +548,87 @@ genuinely different capture mechanisms — Svelte a synchronous re-entrant `rend
 throwaway app, React a data walk with no renderer at all. A single shared mechanism would have had
 to be the worst of the three.
 
-### [OPEN] The base SDK's non-coalescing behaviour must become a stated contract
+### CLOSED — the non-coalescing contract is stated and pinned
 
-Raised by the React owner and it is the most consequential open item to come out of #2.
+`langsys-js-typescript@a654f47`, verified: an **IDENTITY CONTRACT** comment on `_walkForTokens`
+(`src/content-block.ts:314` — "one token per text node. Do not coalesce."), a
+`tests/content-block-identity.test.ts` with seven token-array assertions and pinned id literals,
+and a `CLAUDE.md` line so the next agent meets the contract before touching the walker.
 
-`custom_id` identity depends on **adjacent text nodes not being coalesced** — each text node is its
-own token. That is currently an *implementation detail* of `langsys-js-typescript`'s walker, not a
-documented contract. Once this package, the client SDKs and PHP are all keyed off it, **a
-reasonable-looking "coalesce adjacent text nodes" cleanup upstream silently re-keys every
-catalog in existence.**
+**They mutation-checked it rather than shipping it green** — added `clone.normalize()`, the exact
+forbidden cleanup, confirmed three tests went red, reverted, and recorded it in the commit body.
+Their framing belongs next to §5's conformance requirement:
 
-It needs to be stated as a contract in the base SDK, with a test that fails if it changes, before
-three packages depend on it. The React owner has offered to raise it.
+> **A protective test that has never been observed failing is only assumed to protect.**
+
+In a family whose failures all render as passes, that is not pedantry — it is the difference
+between a guard and a decoration.
+
+One incidental result from the mutation matters for fixture design: **the comment-skipping test
+still passed under `normalize()`**, because `normalize()` does not merge across a comment. So
+coalescing and comment-skipping are **independently pinned** rather than one test standing in for
+both — and that was knowable only by running the mutation, not by reading the tests.
+
+### §5 seed fixtures — five verified cases
+
+Contributed by the React owner, run against the shipped dist; the first three on jsdom, and the
+coalescing pair independently reproduced by the base SDK on happy-dom.
+
+```
+1. text-node arity      <span>Hello {name}!</span>
+                        3 adjacent text nodes -> ["Hello","Bob","!"]
+                        1 merged text node    -> ["Hello Bob!"]      DIFFERENT id
+
+2. comment separation   text <!-- --> text    -> 2 tokens, comment skipped
+                        (must NOT merge the runs)
+
+3. hydration parity     client-only render === hydrated SSR DOM       SAME id
+                        renderToStaticMarkup                          DIFFERENT id
+                        renderToString                                SAME id
+
+4. attribute order      <img src title alt>   -> ["A","T"]
+                        <img src alt title>   -> ["A","T"]            SAME id
+                        (constant order, never element enumeration order)
+
+5. exclusion scope      <p>Keep <img alt="ALTTEXT"> end</p>
+                          -> ["Keep","ALTTEXT","end"]
+                        …translate="no" on the <img>      -> ["Keep","end"]
+                        …translate="no" on an ancestor    -> ["Keep","end"]
+                        CONTROL: <img alt="ALTTEXT"> alone -> ["ALTTEXT"]
+```
+
+**Two structural notes for whoever builds the fixture file:**
+
+- **Cases 4 and 5 are cross-SDK, not React-specific** — the base SDK confirmed `langsys-php`
+  shares the attribute-order property. They are the *better* fixtures precisely because they
+  depend on no framework's renderer.
+- **Only case 3 needs the browser-side arm.** 1, 2, 4 and 5 run headless off an HTML string, so
+  **split the fixture file that way** and PHP and this package can consume the majority with no
+  DOM harness at all.
+
+### Fixture design rule: every absence needs a paired presence
+
+Case 5's control is the point, and it must not be dropped when this becomes a file.
+
+An assertion that an excluded `alt` produces **no token** passes trivially if `alt` was never
+harvested in the first place. The absence is equally consistent with "exclusion works" and "the
+feature does not exist." The control — `<img alt="ALTTEXT">` alone yielding `["ALTTEXT"]` —
+proves harvesting is *possible*, which is what makes the absence mean anything. It also fails
+loudly if `alt` ever leaves `TRANSLATABLE_ATTRIBUTES`, which would otherwise hollow out the
+exclusion case while leaving it green.
+
+> **Every fixture asserting an absence needs a paired fixture establishing presence.**
+
+Half the interesting properties in this domain are exclusions — `translate="no"`, `data-notrans`,
+phrase markers, excluded subtrees — and **every one of them is vulnerable to passing for the
+wrong reason.** This is the same failure class as §10's absence pattern, arriving in test design
+rather than in a check.
+
+**On the pinned literals:** the base SDK's id literals derive from current source rather than a
+published tarball. They agree today. **The shared fixture set is the durable fix** — one artifact
+everyone derives from, rather than four repos independently pinning from their own local builds.
+That is the strongest argument for §5 existing at all, and it came out of them declining to
+overclaim what they had shipped.
 
 ### The client DOM — MEASURED for React, still open for Svelte
 

@@ -94,6 +94,10 @@ jobs:
         working-directory: example
         run: npm install
 
+      - name: Build the example
+        working-directory: example
+        run: npm run build
+
       # Boots the example's BUILT adapter-node output (not the dev server — the defect
       # this package fixes was a production-build defect) and asserts that a crawler
       # fetching /it receives Italian body copy in the served bytes.

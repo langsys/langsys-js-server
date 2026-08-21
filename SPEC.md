@@ -550,6 +550,12 @@ to be the worst of the three.
 
 ### CLOSED — the non-coalescing contract is stated and pinned
 
+> **The contract is in source, not in a published artifact.** `a654f47` is on `main`; the
+> published `langsys-js-typescript` is still **0.6.5**, which predates it. So the version this
+> package pins has the correct *behaviour* and none of the *guard* — the tests that would catch a
+> regression ship in the next release. Pinning `0.6.5` remains right; just do not read the pin as
+> protection. It is a bet on a behaviour, and the thing that makes it a contract arrives later.
+
 `langsys-js-typescript@a654f47`, verified: an **IDENTITY CONTRACT** comment on `_walkForTokens`
 (`src/content-block.ts:314` — "one token per text node. Do not coalesce."), a
 `tests/content-block-identity.test.ts` with seven token-array assertions and pinned id literals,
@@ -605,6 +611,54 @@ coalescing pair independently reproduced by the base SDK on happy-dom.
 - **Only case 3 needs the browser-side arm.** 1, 2, 4 and 5 run headless off an HTML string, so
   **split the fixture file that way** and PHP and this package can consume the majority with no
   DOM harness at all.
+
+### `content` is never a conformance-fixture field
+
+**Requested by the base SDK owner, and worth closing the door on before someone opens it.**
+
+`tokenizeElement` returns `tokens` **and** `content`. Only `tokens` is identity. `content` diverges
+between implementations for at least three reasons, **all of them correct**:
+
+- computed styles are inlined from a **live mounted** element, so a pre-mount or server derivation
+  legitimately lacks them
+- `img.src` absolutizes against a DOM base URL, which a server parse does not have
+- HTML parsers normalise quoting, self-closing forms and entities differently
+
+None of these touch `tokens[]` or `custom_id`.
+
+> **Never assert `content` equality in a shared fixture.** It will fail for reasons that are all
+> correct, and the natural fix — making the snapshots match — would be pure damage: it would force
+> one implementation to reproduce another's incidental serialisation for no gain in identity.
+
+`content` is translator-facing HTML. Divergence there is cosmetic and should be documented, not
+enforced.
+
+### The one deliberate three-way divergence: `<script>` / `<style>`
+
+Recorded so §9's divergence picture stays complete, because this one is **chosen**, not inherited.
+
+The PHP owner measured that their content-block path queues analytics JS and CSS for **permanent
+catalog registration** — `window.dataLayer.push(...)` and `.plan{color:#fff}` arriving as
+translatable phrases — and that `tokenizer-reference.json` case `[12]` currently asserts that
+output *as the contract*. The base SDK's walker has the identical hole.
+
+`langsys-js-server` skips `script` / `style` / `noscript` / `template`, at both siblings' request:
+**do not implement bug-compatibility.**
+
+This is the same shape as the attribute-list trade the builder argued *against* taking — disagreeing
+with your hydration partner on a per-request basis. It was taken anyway, and the reasoning is worth
+preserving:
+
+- **Registering executable code into a permanent, shared catalog is a product harm**, not a keying
+  difference. The two are not comparable costs.
+- **It was mitigated rather than accepted.** The *read* path falls back to the un-skipped
+  derivation, so a block registered by either sibling still resolves. Only *registration* uses the
+  corrected derivation.
+
+That asymmetry — corrected on write, tolerant on read — is the general pattern for diverging from a
+sibling safely, and it should be reused wherever else this package has to. **[OPEN]** for the
+siblings: whether the walkers are fixed and case `[12]` re-baselined, which is a catalog migration
+of the same kind as §9's.
 
 ### Fixture design rule: every absence needs a paired presence
 

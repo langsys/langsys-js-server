@@ -1,0 +1,178 @@
+# Roadmap
+
+Open items, with what blocks each. Mirrors the convention in `langsys-js-typescript` and
+`langsys-php-laravel`.
+
+Entries are written so the next session does not re-litigate a decision from taste. Where
+something is blocked on a fact nobody has, the entry says what the fact is and where to get
+it — a lookup is cheaper than an argument.
+
+---
+
+## 0.2.0 — `<Phrase>` and `<Translate>` server-side
+
+**Status:** not started. The single largest gap; 0.1.0 states it plainly in the README
+capability matrix and `auditRenderedHtml()` reports it per page.
+
+The tokenizer, `custom_id` derivation and marker protocol are already implemented and
+conformance-tested. What is missing is the per-framework **child capture** step, and the
+three frameworks need three genuinely different mechanisms (measured by the framework
+owners, via `langsys-skill`):
+
+| Framework | Mechanism | Sync? |
+|---|---|---|
+| Svelte 5 | re-entrant `render()` from `svelte/server`, throwaway wrapper component | sync, but **lazy** — `.body` evaluates on access |
+| Vue 3 | `async setup()` + throwaway app | **async** — the sync machinery exists but is unexported |
+| React 19 | **no renderer at all** — walk the element tree as data | sync |
+
+**The core stays string→string and synchronous.** `(html, category, ctx) → { html, customId, missing[] }`.
+Adapters own the children→string step and may be async where the framework demands it, so
+Vue's asynchrony never infects the core and one framework's mechanism failing costs an
+adapter rather than the model.
+
+Three constraints that reach past the adapter into what users may write:
+
+1. **Component-level `provide()` / React context does not cross a nested render.**
+   Confirmed independently in Vue and React. A component inside a `<Translate>` slot that
+   injects from an ancestor **silently gets its fallback**. Documentable rule: scope
+   `<Translate>` to leaf content — which is what tokenization wants anyway.
+2. **Svelte's nested capture re-executes 2^depth** (measured: 8 executions of one leaf at
+   capture-depth 3). That is *correctness*, not perf, because `t()` registers misses as a
+   side effect. Memoise capture per snippet identity, or suppress registration during
+   capture passes.
+3. **RSC has two walls.** A Server Component `<Translate>` is hard-impossible
+   (`react-dom/server` resolves to a thrower under the `react-server` condition). A Client
+   Component with server children is *worse*: nothing throws, capture silently returns the
+   Suspense fallback, and the block mis-keys. React's tree-walk removes wall 1 and makes
+   wall 2 **detectable** (`$$typeof === Symbol.for('react.lazy')`). **Fail loudly on an
+   unwalkable child** — treat that as a core requirement, not an adapter nicety.
+
+**Note the two primitives key by opposite means and must not be conflated.**
+`<Translate>` → `tokenizeElement` → `tokens[]` → `generateCustomId`, adjacent text nodes
+**not** coalesced, arity *is* identity. `<Phrase>` → `encodeRichText` → a coalesced,
+whitespace-collapsed **string**, with `{m0o}`/`{m0c}` slot markers; there is no token array
+and no `custom_id`. A rule of "never coalesce adjacent text nodes" is correct for the first
+and actively wrong for the second.
+
+---
+
+## Translatable attributes: converge on PHP's 27
+
+**Status:** blocked on the client family, then on a migration count. Decided 2026-08-21.
+
+PHP's list is the contract. The 15 this package ships are byte-identical to
+`langsys-js-typescript@0.6.5`'s, in identical order; PHP's extra 12 form one contiguous
+appended block, so **nothing already in the list moves** and only blocks carrying one of
+the twelve re-key.
+
+**This package must not ship 27 first** — it would disagree with its own hydration partner
+on every request, which is a per-request cost against PHP interop's deployment-topology
+one. `tests/attribute-list-pin.test.ts` asserts the published base SDK still carries 15 and
+**fails with an instruction when it stops**, which is the signal to move.
+
+**The blocker is the migration, and it is a lookup, not a judgement.** A block re-keys only
+if its subtree carries one of the twelve *with a non-empty value*; every other block's
+`tokens[]` is byte-identical. So the affected set is exactly: content blocks whose stored
+`content` HTML contains any of the twelve attribute names. **Get that count out of the
+Translation Manager before choosing a mechanism** — "carry a fallback indefinitely" and
+"rebase once" have very different prices at 4 blocks than at 4,000, and nobody in the design
+discussion had the number.
+
+Read-side support already exists (`derivations.ts`, `converged-27`), so the day it lands is
+a no-op for lookups.
+
+---
+
+## `<script>` / `<style>` skip: converge with the siblings
+
+**Status:** this package diverges deliberately; the base SDK has backlogged the same fix.
+
+Neither `langsys-php`'s `HtmlParser::walkNode()` nor `langsys-js-typescript`'s
+`_walkForTokens` skips these on the content-block path, so analytics JS and CSS are queued
+for **permanent registration in the shared catalog**. Measured by the PHP owner:
+
+```
+window.dataLayer.push({event:"view",sku:"ABC-123"});
+.plan{color:#fff}
+```
+
+`langsys-php`'s `tests/fixtures/tokenizer-reference.json` case **[12]** asserts that output
+as the contract, so a correct tokenizer fails it — and that failure is correct. The PHP
+owner has corrected their README and asked this package not to reproduce the defect.
+
+This package skips `script`/`style`/`template` and **not** `noscript` (its text renders
+whenever scripting is off). Divergence is mitigated by **corrected on write, tolerant on
+read**: registration uses the corrected derivation, lookups fall back to the un-skipped one.
+`tests/conformance/walker-parity.test.ts` asserts the divergence rather than skipping it, so
+the day the base SDK converges the suite goes red and says to delete the fallback.
+
+**Sequencing note from the base SDK owner:** this and the 12-attribute convergence both
+change `custom_id` and are blocked on the same migration count, so they should almost
+certainly **migrate together as one re-key rather than two**. A chain is harder to retire
+than any link in it.
+
+---
+
+## Hydration hand-off: a synchronous `seedCatalog()`
+
+**Status:** proposed to the base SDK, not agreed.
+
+The client SDKs seed inside `init()`, which `await`s `validate()` before writing the
+catalog — so the seed lands after a network round-trip and after hydration. Fine when the
+server emitted base language; a mismatch when it emitted Italian. Moving the call earlier
+does not help: the blocker is the `await`, not the mount hook.
+
+Seeding is only three synchronous operations (stamp `__category__`, inject
+`__uncategorized__`, set the two exported signals), and both signals are already public
+exports. A `seedCatalog(catalog, locale)` export would be additive, non-breaking, and would
+remove the reason to call `init()` early at all.
+
+`normalizeCatalog()` here already produces the correct shape, so this package is ready for
+it. **Per-framework hydration timing remains open** and is not this package's to answer.
+
+---
+
+## Client-DOM parity: partially measured
+
+**Status:** verified for the Phrase path and for Svelte hydration generally. **Untested for
+a marker-less `<Translate>` host.**
+
+`_dev_/client-dom-parity.js` compares served bytes against the hydrated DOM using the real
+tokenizer on both sides. The affsite-platform owner ran it against production:
+
+- **Base locale: clean.** 3 elements, 0 mismatched, 0 unresolved. Svelte does not restructure
+  text nodes during hydration — it mutates the same node via `set_text` and never calls
+  `splitText`.
+- Two defects in the *instrument* were found and fixed in the process (a guaranteed false
+  alarm on non-base locales, and four invented marker selectors that made `<Translate>`
+  unreachable).
+
+**What remains untested:** a `<Translate>` content block. The SDK stamps **no marker
+attribute** on one — verified, `data-ls-contentblock` and `data-langsys-contentblock` occur
+zero times in the published dist — so the probe needs an explicit `selector`. The reference
+deployment's only production `<Translate>` is on a site whose hostname is not yet assigned.
+
+**Worth requesting upstream:** have the base SDK stamp `data-ls-contentblock` plus the
+resolved `custom_id` on the host element. **An identity you cannot observe from the DOM is
+an identity nobody can debug**, and it would make this probe work by default.
+
+---
+
+## Smaller items
+
+- **Cross-request "already registered" memo.** A phrase missing from the catalog
+  re-registers on *every* request; dedup is per-request by design (SPEC §6.1 forbids a
+  module-global queue). Registration is an idempotent upsert so this is correctness-neutral,
+  but it is avoidable traffic. Trades against holding process state — wants a decision, not
+  a silent choice.
+- **A cache-busting signal from the Translation Manager** would beat any TTL. Translation
+  Manager surface, not this package's.
+- **Shared conformance fixtures.** `langsys-php` owns `tests/fixtures/tokenizer-reference.json`
+  and has asked that this package assert against it **in place** rather than moving it
+  somewhere neutral. Adding *cases* is safe; the proposed restructure that would put the
+  attribute list in the file as normative data is **on hold** until case [12] is resolved —
+  the file already encodes one defect as a contract, and adding a new kind of authority to
+  it first would compound that.
+- **Naming.** `-server` rather than `-node` is settled and now *earned*: the built artifact
+  is executed under Node, Deno, Bun and Workers in CI. Formally Darryl's call until first
+  publish.

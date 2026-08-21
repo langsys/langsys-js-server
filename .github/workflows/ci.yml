@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      # The build-output assertions in tests/build-output.test.ts only run when dist/
+      # exists, and they skip loudly otherwise. Running the suite again after the build
+      # is what actually executes them — they guard the `node:` import prefix, whose
+      # loss silently made this package Node-and-Bun-only while every source test passed.
+      - name: Re-run tests against the built artifact
+        run: npm test
+
+  runtimes:
+    name: Cross-runtime conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Runs an identical 26-check suite against the BUILT dist under Node, Deno, Bun and
+      # Cloudflare Workers (workerd, via miniflare), then requires the identity digests to
+      # MATCH across all four.
+      #
+      # The per-runtime pass is the lesser half. The failure that would actually hurt is
+      # one runtime computing a different custom_id for the same input, fragmenting
+      # catalogs along a line nobody would think to look for — and doing it silently,
+      # because a re-keyed block renders base language and re-registers.
+      #
+      # An uninstalled runtime reports SKIPPED and is never counted as a pass, so this job
+      # pins all four being present rather than trusting the script to notice.
+      - name: Assert all four runtimes are available
+        run: |
+          for r in node deno bun; do
+            command -v "$r" >/dev/null || { echo "::error::$r is not installed; conformance would silently SKIP it"; exit 1; }
+          done
+          test -d node_modules/miniflare || { echo "::error::miniflare missing; the Workers leg would silently SKIP"; exit 1; }
+
+      - run: npm run test:runtimes
+
+  e2e:
+    name: Acceptance tests (SPEC §13)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Install example dependencies
+        working-directory: example
+        run: npm install
+
+      # Boots the example's BUILT adapter-node output (not the dev server — the defect
+      # this package fixes was a production-build defect) and asserts that a crawler
+      # fetching /it receives Italian body copy in the served bytes.
+      #
+      # The suite skips loudly if example/build is missing, so the step below fails the
+      # job rather than letting a skipped acceptance test read as a pass.
+      - name: Assert the example actually built
+        run: test -f example/build/index.js || { echo "::error::example did not build; SPEC §13 acceptance tests would SKIP"; exit 1; }
+
+      - run: npx vitest run tests/e2e
+
+  vendor-parity:
+    name: Vendored functions match the published base SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Re-extracts the pure functions from the PUBLISHED langsys-js-typescript tarball
+      # and executes them against it, requiring byte-identical output. This is what stops
+      # src/vendor/pure.ts drifting from the artifact it was copied out of — a divergent
+      # md5 would re-key every catalog entry this package writes.
+      #
+      # Fails the job if re-vendoring produces a different file than the one committed.
+      - name: Re-vendor and diff
+        run: |
+          ./_dev_/vendor-pure.sh 0.6.5
+          if ! git diff --exit-code --stat src/vendor/pure.ts; then
+            echo "::error::src/vendor/pure.ts differs from a fresh extraction of langsys-js-typescript@0.6.5. Re-run _dev_/vendor-pure.sh and commit the result."
+            exit 1
+          fi

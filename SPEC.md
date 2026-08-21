@@ -561,24 +561,60 @@ catalog in existence.**
 It needs to be stated as a contract in the base SDK, with a test that fails if it changes, before
 three packages depend on it. The React owner has offered to raise it.
 
-### [OPEN] Nobody has measured the client DOM
+### The client DOM — MEASURED for React, still open for Svelte
 
-Every framework answer above compares **server output against server output**, or against a reading
-of the tokenizer. **No one has checked what the client walker actually sees in a live hydrated
-DOM** — which is the other half of `custom_id` identity, and the half that decides whether any of
-this works.
+**[VERIFIED]** by the React owner in jsdom 29 + React 19.2.7, running `tokenizeElement` and
+`generateCustomId` **lifted unmodified from the installed `dist/index.js`** — the shipped
+tokenizer over real DOM states, not a reimplementation of it.
 
-Two specific reasons it cannot be assumed:
+For `<span>Hello {name}!<br/><b>bold</b></span>`:
 
-- React's separators are an isomorphism of the client's text-node structure *in the SSR string*.
-  Whether the hydrated DOM presents the same node boundaries is a different question.
-- Svelte's captured text runs stay whole (`"Hello Sarah world, you have 3 items"` is **one** token),
-  while React's split at every interpolation (**three** tokens for the equivalent). If Svelte's
-  client DOM splits where its server string does not, the Svelte adapter has React's problem in
-  mirror image.
+```
+A. client-only render (createRoot)
+   nodes : text("Hello ") text("Bob") text("!") <br> <b>
+   tokens: ["Hello","Bob","!","bold"]        id 3e3e0a10…
 
-**A browser test is required before any adapter is trusted.** This is the highest-value unresolved
-item in the specification.
+B. SSR renderToString -> HYDRATED live DOM
+   nodes : text("Hello ") comment(" ") text("Bob") comment(" ") text("!") <br> <b>
+   tokens: ["Hello","Bob","!","bold"]        id 3e3e0a10…
+
+C. renderToStaticMarkup -> parsed
+   nodes : text("Hello Bob!") <br> <b>
+   tokens: ["Hello Bob!","bold"]             id 9d499689…   DIFFERENT
+
+D. renderToString -> parsed
+   identical to B                            id 3e3e0a10…
+
+A === B  true      B === C  FALSE      B === D  true
+```
+
+Three results, one of which was not predictable:
+
+1. **Client-only and hydrated agree.** The separators do not perturb identity. Not guaranteed in
+   advance.
+2. **The `<!-- -->` comments survive hydration and live in the client DOM.** They are not a
+   transport artifact React cleans up. So the isomorphism is not merely "in the SSR string" — it
+   is in the DOM the walker actually traverses.
+3. **`renderToString` round-trips the React client DOM exactly**, and the "parse, do not regex"
+   correction is doing precisely the necessary work: a regex that strips comments merges the text
+   runs and lands on **C**, the wrong id.
+
+**Still [OPEN] for Svelte, and the prediction is not reassuring.** Svelte's captured text runs stay
+whole — `Hello {name} world` is **one** token server-side — but Svelte compiles interpolations to
+separate text nodes updated via `set_data`, which would make it **three on the client and one on
+the server**. That is React's problem in mirror image and **worse**, because Svelte emits no
+separator comments, so nothing records the boundary. **Prediction, not measurement** — flagged as
+such, and cheap to settle.
+
+The harness generalizes in about twenty lines; only the render call is framework-specific. Run the
+framework's client render into jsdom, run the **real** `tokenizeElement` from the installed `dist`
+(append one export line to a *copy* of `dist/index.js` — the functions are module-internal but
+top-level in the bundle, so exposing them needs no logic change), and compare `custom_id` against
+the server path. The React owner has sent the recipe to the Svelte owner to settle in their repo.
+
+**Adopt this harness as the conformance suite's browser-side arm.** It is the only check that
+compares the two halves of `custom_id` identity, and §13's acceptance criteria should require it
+per adapter.
 
 ### CORRECTION — do NOT strip comments. Parse them.
 
@@ -616,11 +652,22 @@ the same damage to `renderToString` output.
 Entity decoding stands, for the same reason it always did — parsing yields decoded text, matching
 `textContent` and `nodeValue`. Parsing gets it for free.
 
-**Recorded as a methodology failure, not just a bug.** Two frameworks emitted comment markers that
-looked like noise, so I wrote "strip them" into the core spec as a settled requirement. The third
-framework's measurement showed the same syntax carrying load-bearing information. **Two agreeing
-observations are not a general rule** — and the tell was available: I had no account of *why*
-either framework emitted them, only that both did.
+**Recorded as a methodology failure, not just a bug** — and the React owner's diagnosis of it is
+sharper than my own, so it is theirs that is recorded:
+
+> Vue's `<!--[-->` and Svelte's boundary markers *are* framework noise; that read was correct.
+> React's separators look identical and are the opposite: load-bearing structure. The tell was not
+> that there were two observations instead of three. **"Comment" is a *syntactic* category, and the
+> property that mattered — does this node carry structure — is *semantic*.** A third framework
+> agreeing would not have helped. Reading one renderer's reason for emitting them would have.
+
+That is a materially different lesson from the one I first wrote, and a better one. Mine —
+"two agreeing observations are not a general rule" — implies more samples would have caught it.
+They would not have. **No number of instances repairs a category error; only the reason does.**
+
+The familiar half remains: stripped comments produce clean, plausible HTML and a stable-looking
+id. The defect is invisible from inside the function and only exists relative to a catalog you
+cannot see from there.
 
 **[OPEN] — the half nobody has measured.** All of this compares *server string against server
 string*. **Nobody has checked what the client walker sees in the live DOM post-hydration**, which

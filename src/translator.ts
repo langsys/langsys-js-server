@@ -16,7 +16,7 @@ import { getScope, NO_SCOPE_MESSAGE } from './context.js';
 import { queueMiss } from './harvest.js';
 import { UNCATEGORIZED } from './constants.js';
 import { findUnusedParamKeys, interpolate } from './vendor/pure.js';
-import { warnOnce } from './logger.js';
+import { warnOnceGlobal, type Logger } from './logger.js';
 import type { TranslateParams } from './types.js';
 
 export interface TFunction {
@@ -39,6 +39,18 @@ export interface TFunction {
  *    server-side and correctly client-side: a hydration mismatch on precisely the
  *    strings carrying data.
  */
+/**
+ * There is no request logger outside a scope, by definition. Allocated once at module
+ * scope rather than per call — this sits on a path that fires for every out-of-scope
+ * `t()`, and the latch has usually already fired by then.
+ */
+const CONSOLE_LOGGER: Logger = {
+    log() {},
+    warn: (...args: unknown[]) => console.warn('[langsys-js-server]', ...args),
+    error: (...args: unknown[]) => console.error('[langsys-js-server]', ...args),
+    warnOnce: (_key: string, message: string) => console.warn('[langsys-js-server]', message),
+};
+
 export const t: TFunction = (
     phrase: string,
     second?: string | TranslateParams,
@@ -58,7 +70,7 @@ export const t: TFunction = (
         // and it is indistinguishable from a working page in any curl-shaped check.
         //
         // There is no request logger here, by definition. `console.warn` directly.
-        warnOnce({ log() {}, warn: (...a) => console.warn('[langsys-js-server]', ...a), error() {} }, 'no-scope', NO_SCOPE_MESSAGE);
+        warnOnceGlobal(CONSOLE_LOGGER, 'no-scope', NO_SCOPE_MESSAGE);
         return params ? interpolate(phrase, params, undefined) : phrase;
     }
 

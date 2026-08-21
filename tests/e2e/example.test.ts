@@ -16,11 +16,31 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const exampleDir = fileURLToPath(new URL('../../example', import.meta.url));
-const built = existsSync(`${exampleDir}/build/index.js`);
+const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+const exampleDir = `${repoRoot}/example`;
+const exampleEntry = `${exampleDir}/build/index.js`;
+const distEntry = `${repoRoot}/dist/index.mjs`;
+const built = existsSync(exampleEntry);
+
+/**
+ * Newest mtime under a directory, ignoring build output and dependencies.
+ */
+function newestMtime(dir: string, skip: RegExp = /node_modules|\.svelte-kit|[/\\]build[/\\]/): number {
+    let newest = 0;
+    const walk = (current: string): void => {
+        for (const entry of readdirSync(current, { withFileTypes: true })) {
+            const full = `${current}/${entry.name}`;
+            if (skip.test(full)) continue;
+            if (entry.isDirectory()) walk(full);
+            else newest = Math.max(newest, statSync(full).mtimeMs);
+        }
+    };
+    walk(dir);
+    return newest;
+}
 
 const API_PORT = 5591;
 const APP_PORT = 5590;
@@ -81,16 +101,75 @@ beforeAll(async () => {
     await waitFor(APP);
 }, 60_000);
 
-afterAll(() => {
-    mockApi?.kill();
-    app?.kill();
+/** Kill a child and WAIT for it to actually exit, so it releases its port. */
+function stop(child: ChildProcess | undefined): Promise<void> {
+    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+        const done = (): void => {
+            clearTimeout(force);
+            resolve();
+        };
+        // SIGKILL if it has not gone in a second, so a wedged child cannot hang the run.
+        const force = setTimeout(() => {
+            child.kill('SIGKILL');
+            resolve();
+        }, 1000);
+        child.once('exit', done);
+        child.kill();
+    });
+}
+
+afterAll(async () => {
+    // `kill()` without awaiting exit is why this suite failed roughly one run in three on
+    // repeat: the previous run's children still held 5590/5591, and the next run reported
+    // a confusing ECONNREFUSED rather than "the port is busy".
+    await Promise.all([stop(mockApi), stop(app)]);
 });
 
-describe.skipIf(!built)('the example is actually running', () => {
+describe.skipIf(!built)('the artifacts under test are current', () => {
+    /**
+     * The acceptance suite drives a SvelteKit bundle that **inlined `dist/` when it was
+     * built**. So it can certify a frozen artifact: neutering `t()` in `src/` and running
+     * this suite against a stale `example/build` still reports every test green.
+     *
+     * That made the one suite SPEC §13 calls the acceptance test incapable of failing on
+     * a source regression — a check that produces no signal reading as a pass, in the
+     * suite meant to prove the package works at all.
+     *
+     * These assertions are the fix. `npm run test:e2e` rebuilds both in order; this
+     * refuses to interpret a pass if that did not happen.
+     */
+    it('dist/ is newer than src/', () => {
+        const src = newestMtime(`${repoRoot}/src`);
+        const dist = statSync(distEntry).mtimeMs;
+        expect(
+            dist,
+            'dist/index.mjs is older than src/. The tests below would certify a stale ' +
+                'build. Run `npm run test:e2e`, which rebuilds in the right order.',
+        ).toBeGreaterThan(src);
+    });
+
+    it('the example bundle is newer than dist/', () => {
+        const dist = statSync(distEntry).mtimeMs;
+        const bundle = statSync(exampleEntry).mtimeMs;
+        expect(
+            bundle,
+            'example/build is older than dist/. SvelteKit inlined a previous dist, so ' +
+                'these tests measure an artifact that no longer matches src/.',
+        ).toBeGreaterThan(dist);
+    });
+
     it('serves the app and the mock API', async () => {
         // Positive evidence, before any assertion that could pass on an empty response.
         expect((await fetch(APP)).ok).toBe(true);
         expect((await fetch(`${API}/__test__/fetch-counts`)).ok).toBe(true);
+    });
+
+    it('is actually exercising THIS build of the package', async () => {
+        // The freshness checks above compare timestamps; this proves the running server
+        // reaches our code at all, by asserting a behaviour only this package produces.
+        const html = await (await fetch(`${APP}/it`)).text();
+        expect(html).toContain("L'idratazione");
     });
 });
 
@@ -253,11 +332,27 @@ describe.skipIf(!built)('caching', () => {
 
 // ---------------------------------------------------------------------------
 describe.skipIf(built)('example not built', () => {
-    it('reports that the e2e suite did NOT run', () => {
-        expect(
-            built,
-            'example/build/index.js absent — the SPEC §13 acceptance tests were NOT verified. ' +
-                'Run: cd example && npm install && npm run build',
-        ).toBe(false);
+    /**
+     * A `skipIf` pair is VACUOUS as a signal, and measuring it says so: with `dist/` and
+     * `example/build` removed the suite reported `235 passed | 18 skipped`, exit 0, and
+     * the default reporter printed no test names — so the "was NOT verified" message
+     * appeared nowhere. It reads fine to a human watching verbose output and is invisible
+     * in CI, which is the only place it matters.
+     *
+     * So this is a real gate, not a message. It FAILS unless the operator has explicitly
+     * said an unbuilt run is acceptable.
+     */
+    it('FAILS, because the acceptance tests could not run', () => {
+        if (process.env.LANGSYS_ALLOW_UNBUILT === '1') {
+            expect(built).toBe(false);
+            return;
+        }
+        throw new Error(
+            'example/build/index.js is absent, so the SPEC §13 acceptance tests did NOT run. ' +
+                'This is a failure rather than a skip: "the acceptance tests passed" and "the ' +
+                'acceptance tests never executed" must not produce the same exit code.\n' +
+                'Run `npm run test:e2e` (rebuilds dist/ and the example in order), or set ' +
+                'LANGSYS_ALLOW_UNBUILT=1 to acknowledge an unverified run.',
+        );
     });
 });

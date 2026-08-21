@@ -21,7 +21,7 @@
 import { LangsysApi } from './api.js';
 import { canonicalizeLocale } from './vendor/pure.js';
 import { UNCATEGORIZED } from './constants.js';
-import { warnOnce, type Logger } from './logger.js';
+import type { Logger } from './logger.js';
 import type { Catalog, SharedCache } from './types.js';
 
 interface CachedRecord {
@@ -38,6 +38,28 @@ interface CachedRecord {
 }
 
 export const DEFAULT_TTL_SECONDS = 300;
+
+/** Upper bound on distinct locales held in the process memo. See `rememberInProcess`. */
+export const MAX_MEMOIZED_LOCALES = 64;
+
+/**
+ * Hand every request its own copy of the catalog.
+ *
+ * The memo holds one object per locale for the whole TTL, and `run()` returns it as
+ * `RenderResult.catalog` — which the README and the example both instruct the integrator
+ * to pass onward to a client SDK for seeding. That SDK's `init()` **mutates the object it
+ * is given** (it stamps `__category__` into every category and injects
+ * `__uncategorized__`), which this file already documents from the other side.
+ *
+ * Without a copy, one request's post-processing silently rewrites the catalog every
+ * subsequent request in the process renders against. Load-dependent, invisible with one
+ * user, and only on the default no-shared-cache path — the exact profile this package
+ * exists to eliminate. The shared-cache path is already immune because `JSON.parse`
+ * yields a fresh object per request; this makes the two paths agree.
+ */
+function cloneCatalog(catalog: Catalog): Catalog {
+    return structuredClone(catalog);
+}
 
 export class CatalogStore {
     /**
@@ -59,6 +81,12 @@ export class CatalogStore {
      */
     private readonly processMemo = new Map<string, CachedRecord>();
 
+    /**
+     * Per-key invalidation counter. Incremented by `invalidate()` so a fetch that was
+     * already in flight cannot write a stale catalog back after the invalidation.
+     */
+    private readonly generations = new Map<string, number>();
+
     constructor(
         private readonly api: LangsysApi,
         private readonly logger: Logger,
@@ -75,10 +103,33 @@ export class CatalogStore {
         const now = Date.now();
 
         if (this.sharedCache) {
-            const raw = await this.sharedCache.get(key);
+            // The READ is guarded, not just the parse. A `cache` adapter is user code
+            // talking to a network service: `redis.get()` rejects when the connection
+            // drops. Unguarded, that rejection propagates out of `run()` and through the
+            // host's `handle` hook, so **every SSR request on every worker 500s until
+            // Redis comes back** — the cache tier becomes a hard availability dependency
+            // of page rendering.
+            //
+            // The correct degraded behaviour is the one this package applies everywhere
+            // else: log loudly and fall through to the API. A translation problem must
+            // not become an outage.
+            let raw: string | null = null;
+            try {
+                raw = await this.sharedCache.get(key);
+            } catch (err) {
+                this.logger.error(
+                    `Shared cache read failed for "${locale}"; falling through to the API. ` +
+                        'Rendering is unaffected, but every request is now paying a fetch.',
+                    err,
+                );
+            }
+
             if (raw) {
                 try {
                     const record = JSON.parse(raw) as CachedRecord;
+                    // No clone needed here: JSON.parse already yields a fresh object per
+                    // request, which is what makes this path immune to the aliasing the
+                    // process-memo path has to defend against below.
                     if (record.expiresAt > now) return record.catalog;
                 } catch (err) {
                     // A corrupt record must not take the page down, but it must not be
@@ -89,11 +140,9 @@ export class CatalogStore {
             }
         } else {
             const record = this.processMemo.get(key);
-            if (record && record.expiresAt > now) return record.catalog;
+            if (record && record.expiresAt > now) return cloneCatalog(record.catalog);
 
-            warnOnce(
-                this.logger,
-                'no-shared-cache',
+            this.logger.warnOnce('no-shared-cache',
                 'No shared cache is configured, so each worker holds an independent catalog. ' +
                     'During propagation the same URL can alternate between old and new copy ' +
                     'depending on which worker answers — which reads to a non-engineer as ' +
@@ -104,16 +153,24 @@ export class CatalogStore {
 
         // Single-flight: coalesce concurrent misses for the same key.
         const existing = this.inFlight.get(key);
-        if (existing) return existing;
+        if (existing) return cloneCatalog(await existing);
 
-        const promise = this.fetchAndStore(locale, key)
+        // Stamp the generation this fetch started in. `invalidate()` bumps it, so a fetch
+        // already on the wire when an invalidation lands is not allowed to write its
+        // now-stale result back into the cache. Without this the explicit invalidation is
+        // silently undone and the site serves pre-edit copy for a full TTL — which is
+        // exactly the "my change didn't save" this file exists to prevent, arriving from
+        // the one direction the TTL cannot help with.
+        const generation = this.generations.get(key) ?? 0;
+
+        const promise = this.fetchAndStore(locale, key, generation)
             .finally(() => this.inFlight.delete(key));
 
         this.inFlight.set(key, promise);
-        return promise;
+        return cloneCatalog(await promise);
     }
 
-    private async fetchAndStore(locale: string, key: string): Promise<Catalog> {
+    private async fetchAndStore(locale: string, key: string, generation: number): Promise<Catalog> {
         let catalog: Catalog = {};
         try {
             const response = await this.api.getTranslations(locale);
@@ -131,6 +188,16 @@ export class CatalogStore {
             return {};
         }
 
+        // An invalidation landed while this fetch was on the wire. The result is
+        // already stale, so serve it to THIS request (it is what the API said) but do
+        // not write it back — re-seeding here would undo the invalidation for a full TTL.
+        if ((this.generations.get(key) ?? 0) !== generation) {
+            this.logger.log(
+                `Discarding cache write for "${locale}": invalidated while the fetch was in flight.`,
+            );
+            return catalog;
+        }
+
         const record: CachedRecord = {
             expiresAt: Date.now() + this.ttlSeconds * 1000,
             catalog,
@@ -140,7 +207,7 @@ export class CatalogStore {
             if (this.sharedCache) {
                 await this.sharedCache.set(key, JSON.stringify(record), this.ttlSeconds);
             } else {
-                this.processMemo.set(key, record);
+                this.rememberInProcess(key, record);
             }
         } catch (err) {
             // A cache write failure degrades performance, not correctness.
@@ -151,13 +218,49 @@ export class CatalogStore {
     }
 
     /**
+     * Write to the process memo, bounded.
+     *
+     * The locale reaching `run()` is frequently derived from the URL, and nothing in this
+     * package requires the host to validate it against an allowlist (the example does;
+     * the README does not demand it). If the API answers an unknown locale with
+     * `{status: true, data: {}}` rather than a failure, an unbounded memo pins one entry
+     * per distinct request-supplied string for the life of the process.
+     *
+     * A `Map` preserves insertion order, so evicting the oldest key is a one-liner and
+     * costs nothing in the normal case where an app serves a handful of locales.
+     */
+    private rememberInProcess(key: string, record: CachedRecord): void {
+        this.processMemo.delete(key);
+        this.processMemo.set(key, record);
+        while (this.processMemo.size > MAX_MEMOIZED_LOCALES) {
+            const oldest = this.processMemo.keys().next().value;
+            if (oldest === undefined) break;
+            this.processMemo.delete(oldest);
+        }
+    }
+
+    /**
      * Drop a locale's cached catalog. Targets the SHARED key, so one worker's
      * invalidation is every worker's — mirroring `Client::clearCache()`.
      */
     async invalidate(locale: string): Promise<void> {
         const key = this.key(locale);
+
+        // Bump FIRST, so a fetch already on the wire sees a changed generation when it
+        // lands and declines to write itself back.
+        this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+        this.inFlight.delete(key);
         this.processMemo.delete(key);
-        if (this.sharedCache) await this.sharedCache.delete(key);
+
+        if (!this.sharedCache) return;
+        try {
+            await this.sharedCache.delete(key);
+        } catch (err) {
+            // Same reasoning as the read path: a cache adapter is user code talking to a
+            // network service, and an invalidation failing must not throw into whatever
+            // called it (typically a webhook handler).
+            this.logger.error(`Shared cache delete failed for "${locale}"`, err);
+        }
     }
 }
 

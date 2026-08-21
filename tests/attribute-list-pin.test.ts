@@ -37,7 +37,7 @@ import {
 } from '../src/constants.js';
 
 /**
- * Transcribed from `langsys-js-typescript@0.6.5` `dist/index.mjs:1138-1154`.
+ * Transcribed from `langsys-js-typescript@0.6.5` `dist/index.mjs:1138-1156`.
  * Order is identity — `generateCustomId` hashes `JSON.stringify([category, tokens])`,
  * so a set-equal but order-different array yields a different id.
  */

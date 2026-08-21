@@ -156,8 +156,67 @@ describe('partial-coverage audit', () => {
 
     it('warns through the supplied logger', () => {
         const warn = vi.fn();
-        auditRenderedHtml('<span data-ls-phrase>x</span>', { log() {}, warn, error() {} });
+        auditRenderedHtml('<span data-ls-phrase>x</span>', {
+            log() {},
+            warn,
+            error() {},
+            warnOnce() {},
+        });
         expect(warn).toHaveBeenCalled();
         expect(String(warn.mock.calls[0])).toContain('BASE language');
+    });
+
+    it('reports one finding for an element carrying BOTH marker spellings', () => {
+        // Without the `break`, one problem is reported twice.
+        const result = auditRenderedHtml('<span data-ls-phrase data-langsys-phrase>x</span>');
+        expect(result.findings).toHaveLength(1);
+    });
+
+    it('finds nested markers, not just top-level ones', () => {
+        const result = auditRenderedHtml('<div><section><span data-ls-phrase>deep</span></section></div>');
+        expect(result.findings).toHaveLength(1);
+        expect(result.findings[0].excerpt).toBe('deep');
+    });
+});
+
+describe('partial-coverage audit: content blocks', () => {
+    it('finds NOTHING by default, because <Translate> stamps no marker', () => {
+        // Verified against the published dist: `data-ls-contentblock` and
+        // `data-langsys-contentblock` occur ZERO times, and the only setAttribute calls
+        // in the whole SDK are `src` on <img> and translated-attribute write-back. An
+        // earlier version of this file queried those invented names — the same defect
+        // that shipped briefly in the client-DOM probe.
+        const result = auditRenderedHtml('<div data-ls-contentblock>Untranslated block</div>');
+        expect(result.clean).toBe(true);
+        expect(result.findings).toEqual([]);
+    });
+
+    it('finds content blocks when the caller names the attribute', () => {
+        const result = auditRenderedHtml(
+            '<div data-block>Untranslated block</div>',
+            undefined,
+            { contentBlockAttributes: ['data-block'] },
+        );
+        expect(result.clean).toBe(false);
+        expect(result.findings).toHaveLength(1);
+        expect(result.findings[0].kind).toBe('content-block');
+        expect(result.findings[0].marker).toBe('data-block');
+        expect(result.findings[0].excerpt).toBe('Untranslated block');
+    });
+
+    it('distinguishes a phrase from a content block in the same document', () => {
+        const result = auditRenderedHtml(
+            '<div><span data-ls-phrase>A phrase</span><div data-block>A block</div></div>',
+            undefined,
+            { contentBlockAttributes: ['data-block'] },
+        );
+        expect(result.findings.map((f) => f.kind).sort()).toEqual(['content-block', 'phrase']);
+    });
+
+    it('does not flag an unnamed attribute — the negative control', () => {
+        const result = auditRenderedHtml('<div data-something-else>x</div>', undefined, {
+            contentBlockAttributes: ['data-block'],
+        });
+        expect(result.clean).toBe(true);
     });
 });

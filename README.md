@@ -70,6 +70,14 @@ const { findings, clean } = auditRenderedHtml(html);
 Run it in development. It is not called automatically — scanning every response would put
 a parse in the TTFB path for a check that only matters while you are building.
 
+> **It finds `<Phrase>` only, unless you help it.** A `<Translate>` content block stamps
+> **no attribute on its host** — verified against the published SDK, where
+> `data-ls-contentblock` and `data-langsys-contentblock` occur zero times and the only
+> `setAttribute` calls are `src` on `<img>` and translated-attribute write-back. So
+> `clean: true` means "no phrase markers found", not "nothing is untranslated". If your
+> app marks its own block hosts, name the attribute:
+> `auditRenderedHtml(html, logger, { contentBlockAttributes: ['data-block'] })`.
+
 ---
 
 ## Install
@@ -301,7 +309,10 @@ SDK changes, the suite says so.
 
 ### Marker emission
 
-This package emits **both** `data-langsys-phrase` and `data-ls-phrase`.
+**0.1.0 emits no HTML at all**, so it emits no markers — `<Phrase>` and `<Translate>` land
+in 0.2.0. What ships today is the decision, as the exported `PHRASE_MARKER_ATTRS_EMIT`
+constant: when this package does emit, it will emit **both** `data-langsys-phrase` and
+`data-ls-phrase`.
 
 `langsys-php` does not recognise `data-ls-phrase` at all. Emitting only the JS spelling is
 the single combination that is silently wrong in a topology that ships today — the
@@ -309,6 +320,8 @@ reference deployment runs `adapter-node` **behind a PHP proxy**, and a page pass
 a PHP layer calling `translatePage()` would have its kept-whole sentences re-split. The JS
 reader accepts either spelling and the marker never enters `tokens[]`, so emitting both is
 free.
+
+Reading is live now: `tokenizeHtml` skips subtrees carrying either spelling.
 
 ---
 
@@ -321,14 +334,19 @@ The Langsys SDK family has a documented, recurring failure class:
 Concretely, in this repo:
 
 - **The vendored pure functions are extracted, not transcribed.** `_dev_/vendor-pure.sh`
-  pulls `md5`, `generateCustomId`, `interpolate` and `canonicalizeLocale` verbatim out of
-  the published npm tarball at a pinned version, then **executes** them against the real
-  package and requires the digests to match. A divergent `md5` would re-key every catalog
-  entry this package writes, and hand-transcribing 117 lines of bit manipulation is exactly
-  where that divergence would enter.
+  pulls `md5`, `md5Legacy`, `canonicalizeLocale` and the whole ICU interpolation cluster
+  verbatim out of the published npm tarball at a pinned version, then **executes** them
+  against the real package and requires the outputs to match. (`generateCustomId` is the
+  one-line `md5(JSON.stringify([category, tokens]))` wrapper, written in the script's
+  footer rather than extracted — it is asserted against the published package like
+  everything else.) A divergent `md5` would re-key every catalog entry this package
+  writes, and hand-transcribing 117 lines of bit manipulation is exactly where that
+  divergence would enter. `tests/conformance/vendor-parity.test.ts` re-checks all of it
+  against the installed package on every run.
 - **The tokenizer is differentially tested against the published DOM walker**, not against
-  fixtures written from the same memory as the implementation. 60+ HTML cases, asserting
-  the token *array* (order is identity) and the resulting `custom_id`.
+  fixtures written from the same memory as the implementation. 52 HTML cases plus 2
+  asserted divergences, each checked for both the token *array* (order is identity) and
+  the resulting `custom_id`.
 - **Known divergences are asserted, not skipped.** A skipped test produces no signal. If
   the base SDK adopts the `<script>` skip, those tests fail and tell us to delete them.
 - **The suite is mutation-tested.** Emitting attributes after children, dropping the
@@ -364,17 +382,47 @@ original defect survive in four documents.
 
 ## API
 
+### Configuration
+
+```ts
+createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
+```
+
+| Option | Type | Default | Purpose |
+|---|---|---|---|
+| `projectId` | `string \| number` | **required** | Langsys project |
+| `apiKey` | `string` | **required** | Read-only in production; write in development |
+| `baseLocale` | `string` | **required** | The language your source phrases are written in. Never fetched or harvested. |
+| `apiUrl` | `string` | `https://api.langsys.dev/api` | Override the API host |
+| `debug` | `boolean` | `false` | Enables `log()` output. Warnings and errors are **always** emitted. |
+| `catalogTtlSeconds` | `number` | `300` | Catalog freshness. Also the TTL written into the shared cache. |
+| `cache` | `SharedCache` | none | Cross-worker tier. **Configure this in any multi-worker deployment** — see [Caching and freshness](#caching-and-freshness). |
+| `harvest` | `boolean` | `true` | Disable phrase registration outright, regardless of key type |
+| `fetch` | `typeof fetch` | global | Inject a fetch implementation (tests, proxies, edge runtimes) |
+
+### Exports
+
 | Export | Purpose |
 |---|---|
 | `createLangsysServer(config)` | Create a server instance. No module state; safe to create more than one. |
+| `LangsysServer` | The class `createLangsysServer` returns, exported for typing. |
 | `langsys.run(options, fn)` | Run `fn` with a request-scoped translation context. Returns `{ value, catalog, locale, missing }`. |
-| `langsys.flush(result)` | Drain the miss queue now, returning the promise. For `ctx.waitUntil`. |
+| `langsys.preloadCatalog(locale)` | Resolve a catalog without rendering — for hosts that must publish it to the client *before* the render reads it. |
+| `langsys.flush(result)` | Drain the miss queue now, returning the promise. For `ctx.waitUntil`. Safe alongside the drain `run()` schedules. |
 | `langsys.invalidate(locale)` | Drop a locale's cached catalog across every worker sharing the cache. |
 | `t(phrase, category?, params?)` | Translate. Ambient inside `run()`. |
-| `auditRenderedHtml(html, logger?)` | Find primitives this version does not translate server-side. |
+| `auditRenderedHtml(html, logger?, options?)` | Find primitives this version does not translate server-side. |
 | `tokenizeHtml(innerHtml, options?)` | Content-block tokenizer. Takes **inner** HTML. |
 | `deriveBlockIdentity(innerHtml, category)` | `custom_id` plus read-side fallback derivations. |
-| `generateCustomId`, `interpolate`, `canonicalizeLocale` | Re-exported pure functions, identical to the base SDK's. |
+| `isPhraseMarked(el)` / `isTranslationExcluded(el)` | Marker predicates over a parse5 element. Low-level; mirrored byte-for-byte across the SDK family. |
+| `normalizeCatalog(catalog)` | Stamp the `iTranslations` shape a client SDK expects. Does not mutate its argument. |
+| `generateCustomId`, `generateLegacyCustomId`, `interpolate`, `canonicalizeLocale` | Re-exported pure functions, byte-identical to the base SDK's. |
+| `TRANSLATABLE_ATTRIBUTES`, `PHRASE_MARKER_ATTRS`, `PHRASE_MARKER_ATTRS_EMIT`, `SKIP_ELEMENTS`, `UNCATEGORIZED` | Identity-bearing constants. Read-only by design — there is deliberately no runtime setter. |
+
+Types: `Catalog`, `CatalogCategory`, `KeyType`, `LangsysServerConfig`, `MissingPhrase`,
+`RequestScopeOptions`, `RenderResult`, `SharedCache`, `TranslateParams`, `TFunction`,
+`TokenizeOptions`, `AuditFinding`, `AuditResult`, `AuditOptions`, `BlockIdentity`,
+`Derivation`, `Logger`.
 
 ---
 

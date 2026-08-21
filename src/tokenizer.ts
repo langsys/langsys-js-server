@@ -7,7 +7,7 @@
  * renders in the base language and re-registers, which is indistinguishable from a
  * phrase that was simply never translated.
  *
- * Mirrored from `langsys-js-typescript@0.6.5` `dist/index.mjs:1287-1345`
+ * Mirrored from `langsys-js-typescript@0.6.5` `dist/index.mjs:1288-1338`
  * (`_walkForTokens` / `_tokenizeAttributes`). Where this file deviates, it says so and
  * says why. Divergence-by-tidying is the same failure class as divergence-by-oversight,
  * just better intentioned — so nothing here is "cleaned up".
@@ -49,7 +49,8 @@ export interface TokenizeOptions {
     duplicateSelectOptions?: boolean;
 
     /**
-     * Skip `<script>`/`<style>`/`<noscript>`/`<template>` subtrees.
+     * Skip `<script>`/`<style>`/`<template>` subtrees. NOT `<noscript>`, whose text is
+     * user-visible whenever scripting is off — see `SKIP_ELEMENTS`.
      *
      * Defaults to `true`, which is a knowing divergence from both siblings — see
      * `SKIP_ELEMENTS`. Set `false` to reproduce their output for a fallback read.
@@ -92,7 +93,7 @@ function hasAttribute(element: Element, name: string): boolean {
 
 /**
  * `translate="no"` / `data-notrans`, mirrored byte-for-byte from
- * `langsys-js-typescript` `dist/index.mjs:1156-1161` and `langsys-php`'s method of the
+ * `langsys-js-typescript` `dist/index.mjs:1158-1163` and `langsys-php`'s method of the
  * same name.
  *
  * Presence means intent, like any boolean HTML attribute — but an explicit `="false"`

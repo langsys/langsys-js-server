@@ -16,39 +16,61 @@ export interface Logger {
     log(...args: unknown[]): void;
     warn(...args: unknown[]): void;
     error(...args: unknown[]): void;
+    /**
+     * Warn at most once per LOGGER, for conditions that are per-instance but whose
+     * message is not — a read-only key refusing to harvest is correct production
+     * configuration, and repeating it per phrase would bury the log it is meant to
+     * surface.
+     *
+     * Per-logger rather than per-process, which is the fix for a real defect: with a
+     * module-global latch, two `createLangsysServer()` instances (two tenants, both
+     * read-only-keyed) emitted the warning **once in total**, so the second tenant was
+     * silently diagnosed by the first tenant's log. A latch that suppresses a second
+     * instance's signal is this project's own failure class wearing a helpful face.
+     */
+    warnOnce(key: string, message: string): void;
 }
 
 const PREFIX = '[langsys-js-server]';
 
 export function createLogger(debugEnabled: boolean): Logger {
+    const emitted = new Set<string>();
+    const warn = (...args: unknown[]): void => console.warn(PREFIX, ...args);
+
     return {
         log: (...args) => {
             if (debugEnabled) console.log(PREFIX, ...args);
         },
         // Warnings and errors are UNCONDITIONAL. A warning nobody sees by default is
         // the same as no warning.
-        warn: (...args) => console.warn(PREFIX, ...args),
+        warn,
         error: (...args) => console.error(PREFIX, ...args),
+        warnOnce: (key, message) => {
+            if (emitted.has(key)) return;
+            emitted.add(key);
+            warn(message);
+        },
     };
 }
 
 /**
- * Emit a message at most once per process.
+ * Emit a message at most once per process, for conditions with no instance to attribute
+ * them to.
  *
- * For conditions that are per-phrase or per-request but whose message is not: a
- * read-only key refusing to harvest is correct production configuration, and logging
- * it once per phrase would bury the log it is meant to surface.
+ * This now serves exactly one caller: `t()` called outside any request scope. There is no
+ * `LangsysServer` involved in that case by definition, so per-instance keying is not
+ * available and process-level is the honest scope.
  *
- * NOTE this is the one deliberate piece of module-scoped state in the package, and it
- * is a `Set` of strings that is only ever added to — never read for behaviour, never
- * request-varying, never carrying tenant data. Contrast `langsys-php`'s
- * `static $requirementsWarned`, which under FPM means "once per request" and under a
- * persistent worker silently becomes "once at boot and never again". Here that IS the
- * intent, stated rather than inherited.
+ * Everything that DOES have an instance uses `logger.warnOnce()` instead — see the note
+ * there on why a process-wide latch across instances was a defect.
+ *
+ * NOTE this is the only module-scoped mutable state in the package. It is a `Set` of
+ * string literals that is only ever added to: never read for behaviour, never
+ * request-varying, never carrying tenant data.
  */
 const emittedOnce = new Set<string>();
 
-export function warnOnce(logger: Logger, key: string, message: string): void {
+export function warnOnceGlobal(logger: Logger, key: string, message: string): void {
     if (emittedOnce.has(key)) return;
     emittedOnce.add(key);
     logger.warn(message);

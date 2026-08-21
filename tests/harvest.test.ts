@@ -232,4 +232,121 @@ describe('flush() for edge runtimes', () => {
         expect(h.registerCalls()).toBe(1);
         expect(h.registered[0][0].phrase).toBe('Edge phrase');
     });
+
+    it('does NOT double-post when the scheduled drain also fires', async () => {
+        // The documented Workers path is `run()` then `ctx.waitUntil(flush(result))`, and
+        // `run()` schedules a drain unconditionally. This test previously ended at the
+        // assertion above — measured immediately after `await flush()`, before the
+        // scheduled drain had run — so the count was 1 at the one moment it was still 1.
+        // Waiting for the tick showed 2: every phrase registered twice against a shared
+        // catalog. A test written so the defect cannot produce a signal.
+        const h = harness();
+        const res = await h.langsys.run({ locale: 'it' }, () => {
+            t('Edge alpha');
+            t('Edge beta');
+        });
+
+        await h.langsys.flush(res);
+        await settleDrain();
+
+        expect(h.registerCalls()).toBe(1);
+        expect(h.registered.flat()).toHaveLength(2);
+    });
+
+    it('does not double-post in the other order either', async () => {
+        const h = harness();
+        const res = await h.langsys.run({ locale: 'it' }, () => t('Edge gamma'));
+
+        await settleDrain();
+        await h.langsys.flush(res);
+
+        expect(h.registerCalls()).toBe(1);
+    });
+
+    it('reports loudly when handed something run() did not produce', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const h = harness();
+        const res = await h.langsys.run({ locale: 'it' }, () => t('Edge delta'));
+
+        // A caller who REBUILDS the result loses the internal scope handle. (An object
+        // spread would keep it — spread copies symbol keys — so this reconstructs the
+        // public shape explicitly, which is what a serialize/deserialize round-trip does.)
+        await h.langsys.flush({
+            value: res.value,
+            catalog: res.catalog,
+            locale: res.locale,
+            missing: res.missing,
+        });
+
+        expect(error).toHaveBeenCalled();
+        expect(error.mock.calls.map((c) => c.join(' ')).join()).toContain('did not come from run()');
+    });
+});
+
+describe('phrases discovered after the response flushed', () => {
+    it('still register, rather than being silently dropped', async () => {
+        // A streamed response keeps rendering — and calling t() — after run() resolves.
+        // AsyncLocalStorage propagates the scope into that tail, so those phrases RESOLVE
+        // correctly; before the late-miss hook they simply never registered.
+        const h = harness();
+        let releaseTail!: () => void;
+        const tailRendered = new Promise<void>((r) => (releaseTail = r));
+
+        const res = await h.langsys.run({ locale: 'it' }, async () => {
+            t('Header phrase');
+            // A continuation created INSIDE the scope inherits the AsyncLocalStorage
+            // context, which is exactly how a streamed body keeps resolving correctly
+            // after `resolve(event)` has already settled.
+            void tailRendered.then(() => t('Streamed tail phrase'));
+        });
+
+        await settleDrain();
+        expect(h.registered.flat().map((i) => i.phrase)).toEqual(['Header phrase']);
+
+        // The streamed body renders after the drain.
+        releaseTail();
+        await settleDrain();
+
+        const all = h.registered.flat().map((i) => i.phrase).sort();
+        expect(all).toEqual(['Header phrase', 'Streamed tail phrase']);
+        expect(res.missing.map((m) => m.phrase).sort()).toEqual([
+            'Header phrase',
+            'Streamed tail phrase',
+        ]);
+    });
+
+    it('does not re-post phrases that already went out', async () => {
+        const h = harness();
+        let releaseTail!: () => void;
+        const tailRendered = new Promise<void>((r) => (releaseTail = r));
+
+        await h.langsys.run({ locale: 'it' }, async () => {
+            t('First');
+            void tailRendered.then(() => t('Second'));
+        });
+        await settleDrain();
+        releaseTail();
+        await settleDrain();
+
+        const posted = h.registered.flat().map((i) => i.phrase);
+        expect(posted).toHaveLength(2);
+        expect(new Set(posted).size).toBe(2);
+    });
+});
+
+describe('a render that throws still harvests', () => {
+    it('drains phrases discovered before the error', async () => {
+        // An erroring page is exactly where new, unregistered copy tends to live.
+        const h = harness();
+
+        await expect(
+            h.langsys.run({ locale: 'it' }, () => {
+                t('Phrase before the boom');
+                throw new Error('boom');
+            }),
+        ).rejects.toThrow('boom');
+
+        await settleDrain();
+        expect(h.registered.flat().map((i) => i.phrase)).toEqual(['Phrase before the boom']);
+    });
 });

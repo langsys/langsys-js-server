@@ -87,14 +87,30 @@ export function deriveBlockIdentity(innerHtml: string, category: string): BlockI
     });
     add('converged-27', convergedTokens, generateCustomId(category, convergedTokens));
 
-    // 3. Pre-0.6.3 blocks: <select> option text was harvested twice, and the hash input
-    //    was `tokens.join('-')` rather than JSON.stringify. Both must be reproduced
-    //    together — this is the `generateLegacyCustomId` case.
+    // 3. The two historical shapes that used LEGACY tokens (<select> option text
+    //    harvested twice, pre-0.6.3). There are two, not one, because the md5 fix and the
+    //    token fix shipped at DIFFERENT versions — confirmed against the published SDK's
+    //    own `handleContentBlock`, whose fallback candidates are exactly:
+    //
+    //        generateCustomId(category, legacyTokens)        <- 0.6.0 - 0.6.2
+    //        generateLegacyCustomId(category, legacyTokens)  <- pre-0.6.0
+    //
+    //    (`legacy md5 + corrected tokens` never existed: the hash fix landed first.)
+    //
+    //    Missing the first of those meant a block containing a <select> registered by
+    //    0.6.0-0.6.2 resolved in the client SDK and did NOT resolve here. It does not
+    //    dedup away either — legacyTokens differ from primary tokens whenever a <select>
+    //    or a <script> is present, so the id is genuinely distinct.
+    //
+    //    Note `md5Legacy` differs from `md5` only for NON-ASCII input, so for an
+    //    all-ASCII block the third derivation collapses onto the second. That is correct
+    //    and is why `add()` dedups by id.
     const legacyTokens = tokenizeHtml(innerHtml, {
         duplicateSelectOptions: true,
         skipCodeElements: false,
     });
-    add('legacy-hash', legacyTokens, generateLegacyCustomId(category, legacyTokens));
+    add('legacy-tokens-current-hash', legacyTokens, generateCustomId(category, legacyTokens));
+    add('legacy-tokens-legacy-hash', legacyTokens, generateLegacyCustomId(category, legacyTokens));
 
     return { primary, fallbacks };
 }

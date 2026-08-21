@@ -13,7 +13,11 @@ server rendering.
 ### Added
 
 - `createLangsysServer()` / `langsys.run()` — request-scoped translation context backed by
-  `AsyncLocalStorage`, with no module-level mutable state anywhere in the package.
+  `AsyncLocalStorage`. Nothing request-varying lives outside that scope: the only
+  module-scoped mutable state in the package is a once-per-process warning latch in
+  `logger.ts` (add-only, never read for behaviour, never carrying tenant data), and
+  `LangsysServer` holds the discovered key type as instance state, which is a property of
+  the API key rather than of a request.
 - `t(phrase, category?, params?)` — signature-compatible with the client SDKs, with full
   ICU plural and interpolation support.
 - Fire-and-forget harvesting: request-scoped queue, deduplicated, drained after the

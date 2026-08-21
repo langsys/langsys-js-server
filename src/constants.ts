@@ -87,7 +87,7 @@ export const VALUE_TRANSLATABLE_INPUT_TYPES = ['submit', 'button'] as const;
  * block tokenizer must skip rather than split at tag boundaries.
  *
  * Both spellings are RECOGNISED. `langsys-js-typescript` reads both
- * (`dist/index.mjs:1155`), and the marker never enters `tokens[]`, so accepting both
+ * (`dist/index.mjs:1157`), and the marker never enters `tokens[]`, so accepting both
  * costs nothing in identity.
  *
  * Writing is a different question — see `PHRASE_MARKER_ATTRS_EMIT`.
@@ -95,7 +95,12 @@ export const VALUE_TRANSLATABLE_INPUT_TYPES = ['submit', 'button'] as const;
 export const PHRASE_MARKER_ATTRS = ['data-ls-phrase', 'data-langsys-phrase'] as const;
 
 /**
- * Marker spellings this package EMITS. Both, deliberately.
+ * Marker spellings this package WILL emit. Both, deliberately.
+ *
+ * **Nothing emits them yet.** 0.1.0 renders no HTML — `<Phrase>` and `<Translate>` land in
+ * 0.2.0 — so this constant records the decision rather than implementing it. Stated
+ * plainly because a documented mitigation whose only artifact is a constant naming it is
+ * this project's own failure class: it reads as done.
  *
  * `langsys-php` does not recognise `data-ls-phrase` at all — the string does not occur
  * in its `src/`. So emitting only the JS spelling is the single combination that is

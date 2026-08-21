@@ -19,7 +19,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Catalog, KeyType, MissingPhrase } from './types.js';
+import type { Catalog, MissingPhrase } from './types.js';
 import type { Logger } from './logger.js';
 
 export interface RequestScope {
@@ -34,11 +34,28 @@ export interface RequestScope {
     /** Deduplication index for `missQueue`, so a page rendering the same miss 50 times posts it once. */
     missSeen: Set<string>;
     projectId: string | number;
-    keyType: KeyType;
     baseLocale: string;
     logger: Logger;
-    /** True once the response has flushed and the queue has been drained. */
+    /** True once at least one drain has completed for this request. */
     drained: boolean;
+    /** Guard against two drains running concurrently for the same request. */
+    draining: boolean;
+    /**
+     * How many entries of `missQueue` have already been POSTed.
+     *
+     * An index rather than emptying the queue, so `RenderResult.missing` stays a complete
+     * record of what this render could not resolve — a caller reading it after the drain
+     * must not find it mysteriously empty.
+     */
+    posted: number;
+    /**
+     * Called when a miss is queued AFTER a drain has already completed.
+     *
+     * A streamed response keeps producing body — and calling `t()` — after `run()`'s
+     * promise resolves. AsyncLocalStorage propagates the scope into that tail correctly,
+     * so those phrases RESOLVE correctly; without this hook they simply never register.
+     */
+    onLateMiss?: () => void;
 }
 
 /**

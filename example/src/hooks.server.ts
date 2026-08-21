@@ -23,15 +23,23 @@ export const handle: Handle = async ({ event, resolve }) => {
     const segment = event.url.pathname.split('/')[1];
     const locale = isLocale(segment) ? segment : BASE_LOCALE;
 
-    const { value, catalog } = await langsys.run({ locale }, () =>
-        resolve(event, {
-            transformPageChunk: ({ html }) => html.replace('%lang%', locale),
-        }),
-    );
-
-    // Hand the exact catalog this render used to the client, so hydration cannot disagree.
-    event.locals.langsysCatalog = catalog;
+    // Seed `locals` BEFORE the render, not after.
+    //
+    // `+layout.server.ts` reads these during `resolve(event)`. Assigning them afterwards
+    // meant the payload serialised `{langsysCatalog: undefined, langsysLocale: undefined}`
+    // — the hand-off the comment claimed to perform never happened, and nothing failed,
+    // because no test asserted it. `app.d.ts` typed the field as non-optional `Catalog`,
+    // so TypeScript agreed with the comment rather than with the bytes.
     event.locals.langsysLocale = locale;
+    event.locals.langsysCatalog = await langsys.preloadCatalog(locale);
+
+    const { value } = await langsys.run(
+        { locale, catalog: event.locals.langsysCatalog },
+        () =>
+            resolve(event, {
+                transformPageChunk: ({ html }) => html.replace('%lang%', locale),
+            }),
+    );
 
     return value;
 };

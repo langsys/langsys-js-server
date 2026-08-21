@@ -25,7 +25,12 @@
  * rule 2 — a check must come from a different source than the claim).
  *
  * @ts-nocheck is deliberate and scoped: the bodies below are the published artifact's
- * own JavaScript, copied byte-for-byte. Annotating them would mean EDITING vendored
+ * own JavaScript, extracted verbatim by `sed` rather than retyped. Two mechanical
+ * changes are applied and are the ONLY ones: declarations that need their clean name
+ * freed for a typed wrapper are renamed to `...Impl`, and `canonicalizeLocale`'s
+ * `if (logger.debugEnabled) logger.warn(...)` branch is dropped (this package has no
+ * module-global debug flag; the RETURN VALUE, which is all `custom_id` depends on, is
+ * untouched). Nothing else is edited. Annotating them would mean EDITING vendored
  * code, which defeats the point of extracting it. The typed, checked surface is the
  * wrapper set at the bottom of this file — that is what the rest of the package
  * imports, and it is fully checked.
@@ -379,11 +384,21 @@ export function generateCustomId(category: string, tokens: string[]): string {
 }
 
 /**
- * Lookup-only fallback for content blocks registered before the hash-input encoding
- * changed from `tokens.join('-')` to `JSON.stringify`.
+ * Lookup-only fallback for content blocks whose id was hashed before `md5` switched to
+ * hashing UTF-8 BYTES.
+ *
+ * **The difference is the MD5 input encoding, not the JSON encoding.** Both this and
+ * `generateCustomId` hash `JSON.stringify([category, tokens])` — verified against the
+ * published dist, where `generateLegacyCustomId` is `md5Legacy(JSON.stringify(...))`.
+ * `md5Legacy` hashes raw UTF-16 code units, so **it differs from `md5` only for
+ * non-ASCII input**, and an all-ASCII block produces the identical id under both.
+ *
+ * That last property is not a curiosity: it means this derivation legitimately collapses
+ * onto another for ASCII content, which is why `derivations.ts` deduplicates by id rather
+ * than assuming each derivation is a distinct lookup.
  *
  * NEVER register with this. Registration always uses `generateCustomId`; this exists so
- * pre-0.6.3 catalog entries can still be READ rather than silently falling back to base
+ * older catalog entries can still be READ rather than silently falling back to base
  * language.
  */
 export function generateLegacyCustomId(category: string, tokens: string[]): string {

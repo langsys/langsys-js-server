@@ -107,7 +107,7 @@ jobs:
       - name: Assert the example actually built
         run: test -f example/build/index.js || { echo "::error::example did not build; SPEC §13 acceptance tests would SKIP"; exit 1; }
 
-      - run: npx vitest run tests/e2e
+      - run: npx vitest run --config vitest.e2e.config.ts
 
   vendor-parity:
     name: Vendored functions match the published base SDK

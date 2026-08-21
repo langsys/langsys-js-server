@@ -43,7 +43,7 @@
         "test:all": "npm run build && npm run test && npm run test:runtimes && npm run test:e2e",
         "example:install": "cd example && npm install",
         "example:build": "cd example && npm run build",
-        "test:e2e": "npm run example:build && vitest run tests/e2e",
+        "test:e2e": "npm run build && npm run example:build && vitest run --config vitest.e2e.config.ts",
         "release": "./_dev_/publish.sh"
     },
     "keywords": [

@@ -46,7 +46,7 @@ Moving `init()` to the server does not fix it — it breaks worse. **[VERIFIED]*
 |---|---|
 | `LangsysApp` is a hard module singleton | `dist/index.mjs:991` — `var LangsysApp = new LangsysAppClass()` |
 | Catalog state is module-global | `:255-256` — `sTranslations`, `currentlyLoadedLocale` |
-| A per-request instance is **not** isolated | `:409-410` — `Translations`' own constructor subscribes to those globals |
+| A per-request instance is **not** isolated | `:410-411` — `Translations`' own constructor subscribes to those globals |
 
 Under a long-lived server one process serves every concurrent request, so seeding those
 globals server-side is a cross-request data race: an in-flight `/de` render can observe
@@ -140,12 +140,57 @@ Ambient scoping is a requirement, not a convenience: `t()` is legitimately calle
 `load` functions and plain utility modules that have no component context, so framework
 context (Svelte context, Vue `provide`, React context) cannot cover the surface alone.
 
-A useful **[VERIFIED]** detail about the base SDK's shape: every read funnels through
-`buildTFn`, whose entire dependency is `sTranslations.get()` and `currentlyLoadedLocale.get()`.
-If the base SDK ever wanted request-awareness, the blast radius is those two accessors. This
-package should not depend on that happening — but the tokenization and id functions it *will*
-depend on are already pure, which is the property that makes an independent implementation
-viable at all.
+#### What module state actually leaks per request — answered
+
+Open question #1, answered by the base SDK owner against `langsys-js-typescript` `src/` at
+`0.6.5`. **The two-accessor claim is true but much narrower than it reads**, and the prime
+suspect was the wrong suspect.
+
+**`buildTFn` really does depend on only `sTranslations.get()` and `currentlyLoadedLocale.get()`
+(`src/translations.ts:124`, `:144`) [VERIFIED].** That bounds *phrase lookup*. It does not bound
+the SDK, because everything around lookup — auth, key type, catalog fetching, harvesting,
+locale memos — reads different module state.
+
+**`persist()` is clean. [VERIFIED]** `getSafeStorage()` returns `null` when
+`typeof window === 'undefined'`, and `persist()` calls it **once at module init**
+(`src/persist.ts:9`, `:35-37`), so on a server `sTranslations` degrades to a plain in-memory
+Signal and never touches `localStorage`. No writeback subscriber is even attached. The
+suspicion was reasonable and it does not hold.
+
+What does leak, all **[VERIFIED]** and all invisible with one user:
+
+| # | State | Where | Why it matters on a server |
+|---|---|---|---|
+| 1 | `config` — a module-level **mutable** object | `src/stores.ts:17-24` | Holds `projectid`, `key`, `key_type`, `baseLocale`, `debug`, `sUserLocale`. `init()` writes into it (`langsys-app.ts:115`), and `LangsysAppClass`'s constructor **aliases it by reference** (`:34`). This is **cross-tenant**, not merely cross-locale. |
+| 2 | `LangsysAppAPI` singleton: `this.config`, `this.headers['x-Authorization']`, `apiurl` | `src/api.ts:157`, `:31-35`, `:39` | `setup()` overwrites the auth header, and `validate()` calls `setup()`. Two concurrent requests for different projects race on **which API key goes out on the wire**. Strictly worse than a stale catalog: a wrong-tenant read, not a wrong-language render. |
+| 3 | `Translations` instance fields: `missingTokens[]`, `lastLoaded{}`, `locale`, `flushScheduled`, `isFirstClientRun` | `src/translations.ts:36-42` | They sit on the singleton, so they are module-global in effect. Under the **default** `ssrTokenStrategy: 'client'` the SSR branch only logs (`:209-212`) — server-side misses are queued and **never drained**, growing for the life of the process, deduped by an O(n) linear scan per miss (`:174`). |
+| 4 | `LangsysAppClass` locale memos: `locales`, `countries`/`countriesLocale`, `dialCodes`/`dialCodesLocale`, `currencies`/`currenciesLocale` | `src/langsys-app.ts:20-29` | **Single-slot caches keyed by "the last locale asked for."** Concurrent `/it` and `/de` renders thrash one entry and can serve each other's country and currency lists. |
+| 5 | `logger` singleton `debugEnabled` | `src/logger.ts:47` | Process-wide, not per request. Minor, but it is state. |
+
+One thing is genuinely clean besides `persist()`: the 3s flush `setInterval` is guarded to the
+client (`src/translations.ts:236`, `:246-247`), so no timer is created on a server. **[VERIFIED]**
+
+#### The consequence for this package: importing the base SDK is not free
+
+`src/langsys-app.ts:391` runs `new LangsysAppClass()` **at module scope**; its constructor
+builds a `Translations`, whose constructor subscribes to both globals; and `src/index.ts:86`
+reads `_LangsysApp.Translations.tSignal` at module scope too. `package.json` declares a
+**single `"."` export and no `"sideEffects"` field** — so there is no subpath to import from
+and no reliable way for a bundler to drop it. **[VERIFIED]**
+
+> `import { generateCustomId } from 'langsys-js-typescript'` instantiates the entire
+> singleton graph — shared catalog, shared miss queue, shared auth header — inside the
+> server process.
+
+The functions this package wants (`generateCustomId`, `generateLegacyCustomId`,
+`tokenizeElement`, `interpolate`, `canonicalizeLocale`, `md5`) are genuinely pure, so the
+*logic* is safe to reuse. The **module graph** is not.
+
+**[OPEN]** How to consume them: vendor the pure functions with a conformance test pinning them
+to the published SDK, or ask the base SDK for `sideEffects: false` plus a
+`langsys-js-typescript/pure` subpath export. The second is better for parity and is a small,
+non-breaking change — but it is the base SDK owner's call and is **not yet agreed**. Do not
+assume it will exist.
 
 Per-request context carries at minimum:
 
@@ -226,9 +271,15 @@ package's implementation:
 
 - Omitting `interpolate` renders the literal `Hello {name}` server-side and correctly
   client-side — a hydration mismatch on precisely the strings carrying data
-  (`dist/index.mjs:144`).
+  (`dist/index.mjs:473`).
 - `|| phrase` does not guard the object case; the SDK checks
-  `typeof value === 'string' && value.length > 0` (`:136`).
+  `typeof value === 'string' && value.length > 0` (`:466`).
+
+  > Both line numbers were wrong in the first draft (`:144` and `:136`), and the error came
+  > from the base SDK agent, who quoted `src/translations.ts` line numbers that were then
+  > recorded against `dist/index.mjs`. The claims were correct; the citations pointed at
+  > `patch()` and `post()`. Re-checked by reading the dist. This is §10 rule 6 in miniature:
+  > the numbers arrived as premises inside an argument about something else.
 
 ---
 
@@ -303,6 +354,44 @@ run in CI by `langsys-php`, `langsys-js-typescript` and this package. Minimum co
 - attributes carrying translatable values (§9)
 - identical content under different categories, asserting the ids differ
 
+Added by the base SDK owner, from the walker's actual behaviour
+(`src/content-block.ts:313-395`) — these are the places three implementations can plausibly
+disagree while each looks right in isolation:
+
+- **Token ORDER is part of the identity, not just the set. [VERIFIED]** `generateCustomId`
+  hashes `JSON.stringify([category, tokens])` (`:162-164`), so a set-equal but
+  order-different array yields a different id. The JS walker emits, per element:
+  **attributes first, then children** (`_tokenizeAttributes` at `:334-335` precedes the
+  recursive descent at `:345`), depth-first in document order. A DOM walk that emits
+  attributes after text is a conformant-looking implementation that fragments every catalog
+  containing an `alt` or a `placeholder`. **Fixtures must assert the array, never a set.**
+- **An excluded or `<Phrase>`-marked element loses its ATTRIBUTES too. [VERIFIED]** The
+  exclusion check returns before `_tokenizeAttributes` (`:322-329`), so `translate="no"` on an
+  `<img alt="...">` drops the `alt` as well as the subtree. Easy to implement as
+  "skip children" and be wrong only on attribute-bearing nodes.
+- **`&nbsp;` (U+00A0) collapses and trims in JS.** Text tokens are normalised with
+  `.replace(/\s+/g, ' ').trim()` (`:338`), and JS `\s` **does** match U+00A0 — verified by
+  execution: `"Hello\u00A0world\u00A0"` → `"Hello world"`. **[OPEN]** PHP's `trim()` does not
+  strip U+00A0 by default and `\s` in PCRE only does with `/u`. If PHP retains it, every token
+  containing a non-breaking space diverges. **This is a concrete first fixture — please
+  confirm rather than assume, in either direction.**
+- **There are already TWO tokenizers in the base SDK, and only one is registerable.**
+  `tokenizeElement` (`:265-270`) and `legacyTokenizeElement` (`:288-292`) call the same walker
+  with different flags — `duplicateSelectOptions` and `applyStyles`. The legacy one exists
+  because `<select>` option text was harvested twice before 0.6.3. **Registration always uses
+  the corrected list; the legacy list is lookup-only fallback.** A new implementation must
+  produce the *corrected* tokens and should be able to produce the legacy ones for fallback
+  reads, or it will silently orphan pre-0.6.3 blocks. Fixture both.
+- **`tokens` and `content` have different portability.** `tokenizeElement` returns both;
+  `content` inlines computed styles from the **live, mounted** element and "silently no-ops"
+  pre-mount (`:261-263`). So a block first registered by *this* package arrives at the
+  Translation Manager with an unstyled snapshot, where the same block registered from a
+  browser arrives styled. **Tokens and `custom_id` are unaffected** — this is a translator-UX
+  divergence, not an identity one, but it will be visible to humans and should be a stated,
+  accepted consequence rather than a surprise.
+- Comment nodes, CDATA, and text nodes that normalise to the empty string (dropped at `:339`,
+  not emitted as `""`).
+
 Fixtures must be authored so that a wrong implementation *fails*, not merely so a right one
 passes. An implementation is not conformant because it produced no diff — see §10.
 
@@ -331,9 +420,27 @@ Requirements:
    production registers phrases from live user traffic, and the catalog pollution is permanent
    and shared.
 
-**[OPEN]** Whether registration should be attempted at all under a read-only key, or refused
-with a clear log line. Refusing is probably right, but confirm the API's behavior rather than
-assuming a 4xx.
+**Answered** by the base SDK owner — there is an existing precedent, so this is a
+consistency question rather than an API question. `registerContentBlock` refuses **locally**
+and never makes the call **[VERIFIED]**, `src/content-block.ts:216-221`:
+
+```ts
+if (configStore.key_type !== 'write') {
+    if (configStore.debug) logger.log(`Skipping content block save (API key is ${...})`);
+    return { status: true };   // caller still renders the cached translation
+}
+```
+
+Two properties worth copying and one worth **not** copying:
+
+- Copy: refuse locally, and return **success** so the render path is unaffected. A read-only
+  key is a correct production configuration, not an error condition.
+- Copy: `key_type` is discovered from the authorize response, not configured — so "is this a
+  write key" is knowable before any registration attempt.
+- **Do not copy the `if (debug)` gate.** That log is invisible in the default configuration,
+  which is §10's failure class exactly, and §6.3 of this document already requires the
+  opposite ("fire-and-forget, but not silent"). Log the refusal unconditionally, once per
+  process rather than once per phrase.
 
 ---
 
@@ -353,10 +460,31 @@ Required properties **[PROPOSED]**:
    inside `init()` in a mount hook, which is after hydration — fine when the server emitted
    base language, a mismatch when it emitted Italian.
 
-**[OPEN]** Point 3 is a genuine change to the client SDKs' handoff, and it is the part of this
-design most likely to require coordinated releases. Determine whether the client SDKs can seed
-synchronously from a serialized payload at module scope, and what that does to their existing
-`initialTranslations` contract.
+**Partially answered** by the base SDK owner. The blocker is **not** the mount hook — it is
+that seeding sits behind a network round-trip.
+
+`init()` awaits `LangsysAppAPI.validate()` (`src/langsys-app.ts:109`) and only then seeds
+(`:121-133`) **[VERIFIED]**. So even called at module scope, the seed lands after an `await`.
+Moving the call earlier does not make it synchronous.
+
+What makes this tractable: the two signals are **already public exports**, and seeding is only
+three synchronous operations — stamp `__category__` into each category, inject
+`__uncategorized__` if absent, then `sTranslations.set()` and `currentlyLoadedLocale.set()`.
+No fetch is involved. `__category__` is a required field of `iTranslations`
+(`src/types/translations.ts:11`) but **[VERIFIED]** no runtime code branches on its value — it
+is written in four places and read in none — so the stamping is a shape obligation, not a
+behavioural one.
+
+**[PROPOSED]** Ask the base SDK for a synchronous `seedCatalog(catalog, locale)` export doing
+exactly those three things and nothing else. It is additive, non-breaking, needs no version
+coordination with `init()`, and it removes the reason to call `init()` early at all. A
+consumer can approximate it today by setting the two exported signals directly, but that
+bypasses the stamping and must not be recommended as the supported path.
+
+**Still [OPEN]:** whether each framework can run that seed before its own hydration entry
+point, which is a per-framework question this package cannot answer. Also note the seeding
+defects below are **not** fixed as of `0.6.5` — a synchronous seed path should not inherit
+them.
 
 For reference, the current seeding contract **[VERIFIED]** against `0.6.5`:
 
@@ -414,8 +542,13 @@ data-invalid-message, data-required-message, data-pattern-message
 
 Plus `value` on `<button>` and on `<input type="submit|button">`.
 
-**[OPEN]** Confirm PHP's list matches exactly. If it does not, that divergence is a defect in
-one of them and needs an owner's decision, not a merge.
+**Transcription confirmed** by the base SDK owner: the 15 attributes above match
+`TRANSLATABLE_ATTRIBUTES` at `src/content-block.ts:48-64` exactly, in that order, and the
+`value` note matches `VALUE_TRANSLATABLE_ELEMENTS = ['button']` and
+`VALUE_TRANSLATABLE_INPUT_TYPES = ['submit', 'button']` (`:129-130`). **[VERIFIED]**
+
+**[OPEN]** remains for PHP's side — that comparison needs the PHP agent, and per §10 rule 2 it
+should not be settled by the JS owner reading a PHP file.
 
 ---
 
@@ -484,14 +617,16 @@ Do not begin building the affected section until these are resolved.
 
 | # | Question | Section | Owner |
 |---|---|---|---|
-| 1 | Is ALS-based scoping sufficient, or does other module state leak per request (the `persist()`/`localStorage` wiring is the obvious suspect on a server)? | §3.1 | base SDK |
+| 1 | ~~Is ALS-based scoping sufficient, or does other module state leak per request?~~ **ANSWERED §3.1.** `persist()` is clean; five other pieces of module state leak, incl. the API auth header. Importing the base SDK at all instantiates the singleton graph. | §3.1 | base SDK ✅ |
 | 2 | Can Svelte 5 / React / Vue each render a child tree to a string at render time, and at what cost? | §3.3 | framework SDKs + reference deployment |
 | 3 | Can the tokenizer produce byte-identical tokens from an HTML string as from a DOM? Prove on fixtures before committing. | §5 | this package + PHP |
-| 4 | Should registration be attempted under a read-only key, or refused with a log line? | §6 | base SDK |
-| 5 | Can client SDKs seed synchronously before hydration, and what does that do to the `initialTranslations` contract? | §7 | client SDKs |
+| 4 | ~~Should registration be attempted under a read-only key?~~ **ANSWERED §6.** Refuse locally, return success, log unconditionally (the SDK's own precedent gates the log on `debug` — do not copy that). | §6 | base SDK ✅ |
+| 5 | Can client SDKs seed synchronously before hydration? **PARTIALLY ANSWERED §7** — the blocker is that `init()` seeds *after* `await validate()`, not the mount hook. A `seedCatalog()` export is proposed. Per-framework hydration timing is still open. | §7 | client SDKs |
 | 6 | What should this package do about multi-worker cache inconsistency? What does PHP already do? | §8 | PHP |
-| 7 | Do the JS and PHP translatable-attribute lists match exactly? | §9 | PHP |
+| 7 | Do the JS and PHP translatable-attribute lists match exactly? **JS side confirmed §9**; PHP side still open. | §9 | PHP |
 | 8 | `-server` or `-node`? | §11 | Darryl |
+| 9 | **NEW.** How does this package consume the base SDK's pure functions without importing its singleton graph — vendor-with-conformance-test, or request `sideEffects: false` + a `/pure` subpath export? | §3.1 | base SDK + this package |
+| 10 | **NEW.** Does PHP's tokenizer retain `&nbsp;` (U+00A0) where JS collapses and trims it? First conformance fixture either way. | §5 | PHP |
 
 ---
 
@@ -546,3 +681,4 @@ result and should not be disguised as a review.
 | Date | Reviewer | What changed |
 |---|---|---|
 | 2026-08-21 | `langsys-skill` agent | Initial draft from the SSR design discussion |
+| 2026-08-21 | `langsys-js-typescript` agent (base SDK) | Answered open questions #1 and #4; partially answered #5. Corrected two wrong `[VERIFIED]` citations in §3.4 and one in §1. Added seven tokenizer-parity fixture requirements to §5, incl. token *ordering* as part of `custom_id` identity. Confirmed §9's attribute list against source. Raised two new open questions (#9, #10). |

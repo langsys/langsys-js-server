@@ -158,21 +158,82 @@ an identity nobody can debug**, and it would make this probe work by default.
 
 ---
 
+## The single re-key event
+
+**Five three-way divergences all change `custom_id`, and they should land as ONE
+migration, not five.** Established jointly with the base SDK and `langsys-php` owners.
+
+| # | Divergence | Who is out of step |
+|---|---|---|
+| 1 | `&nbsp;` (U+00A0) normalisation | PHP retains it; the JS family collapses it |
+| 2 | the 12-attribute convergence | JS carries 15, PHP carries 27 |
+| 3 | the `<script>`/`<style>` skip | both siblings harvest them; this package does not |
+| 4 | **attribute-value whitespace collapse** | PHP collapses internal whitespace; the JS family only trims |
+| 5 | **`%name%` placeholder normalisation** | PHP has no `%name%` concept at all |
+
+4 and 5 were found by the PHP owner while reviewing this package's tokenizer — they went
+looking for bugs here, found two candidates, and both turned out to be `langsys-php`
+diverging from the JS family. Measured, not reasoned:
+
+```
+<img alt="A long⏎     description">   PHP a64d7b6e…   JS/here d4b11bd9…
+<p>Hello %name%</p>                   PHP 73b75576…   JS/here 0df96de8…
+```
+
+**#4 outranks `&nbsp;` on real-world frequency** — line-wrapping a long `alt` or `title`
+is ordinary formatting, and a linter will do it for you. It also exposes an internal
+inconsistency in the JS family: the same authored content produces the *same* id in PHP
+whether it sits in a text node or an attribute, and *different* ids here, because text
+collapses and attributes only trim. So it is a genuine three-way decision rather than
+"PHP converges".
+
+**Why one event.** Five separate migrations means five separate windows in which half a
+catalog resolves and half falls back, and each one individually looks like "some pages
+aren't translated". A chain of fallbacks is also harder to retire than any link in it.
+
+**Two fixes can go early, because neither touches an id:**
+
+- **`%name%` at render time.** `langsys-php` renders the literal `%name%` to end users,
+  while this family's own SDK actively instructs people to write it (the vendored
+  unmatched-param warning says *"write %name% instead"*). One SDK teaches the convention
+  as the fix for template-compiler interference and the other prints it to the page.
+  Teaching PHP's `Interpolator` to accept `%name%` fixes the user-visible half and changes
+  no ids at all.
+- **PHP's `<noscript>` and `<svg>` skips.** `PageTranslator::SKIP_ELEMENTS` skips both, so
+  "Enable JavaScript to continue" never registers, and every chart label and accessible
+  `<svg><title>` in a PHP page is permanently untranslated. This is *additive* — it
+  discovers phrases rather than re-keying existing ones — so it is the cheapest item on
+  the list. Same root cause as the `<noscript>` mistake this package made and corrected:
+  **it pattern-matches as technical.**
+
 ## Smaller items
 
-- **Cross-request "already registered" memo.** A phrase missing from the catalog
-  re-registers on *every* request; dedup is per-request by design (SPEC §6.1 forbids a
-  module-global queue). Registration is an idempotent upsert so this is correctness-neutral,
-  but it is avoidable traffic. Trades against holding process state — wants a decision, not
-  a silent choice.
 - **A cache-busting signal from the Translation Manager** would beat any TTL. Translation
   Manager surface, not this package's.
+- **Clock skew on the shared expiry.** `expiresAt` is stamped with `Date.now()`, which is
+  per-host, so with Redis across machines the stamp is only as good as clock agreement.
+  It degrades safely — Redis's own TTL gives a second, skew-free expiry — and the caveat
+  is inherited from `time()` in `langsys-php`'s `FileCache` rather than introduced here.
+- **A cross-request "already registered" memo.** A phrase missing from the catalog
+  re-registers on *every* request; dedup is per-request by design (SPEC §6.1 forbids a
+  module-global queue). Registration is an idempotent upsert so this is
+  correctness-neutral, but it is avoidable traffic. Trades against holding process state —
+  wants a decision, not a silent choice.
+- **Ask the base SDK to stamp `data-ls-contentblock` + the resolved `custom_id`** on
+  `<Translate>` hosts. Verified: it currently stamps nothing, so a content block's identity
+  is unobservable from the DOM — which breaks `auditRenderedHtml` and
+  `_dev_/client-dom-parity.js` by default, and more importantly leaves anyone debugging a
+  re-keyed block in production with nothing to look at. **An identity you cannot observe
+  from the DOM is an identity nobody can debug.** Additive and cannot affect `tokens[]`;
+  the base SDK owner measured that it changes only the `content` snapshot, so the stamp
+  must be written AFTER `tokenizeElement` returns.
 - **Shared conformance fixtures.** `langsys-php` owns `tests/fixtures/tokenizer-reference.json`
   and has asked that this package assert against it **in place** rather than moving it
-  somewhere neutral. Adding *cases* is safe; the proposed restructure that would put the
-  attribute list in the file as normative data is **on hold** until case [12] is resolved —
-  the file already encodes one defect as a contract, and adding a new kind of authority to
-  it first would compound that.
+  somewhere neutral. **They will regenerate it against corrected behaviour once the re-key
+  above lands, and ping this repo then** — wiring a third consumer in before that would
+  make each of the five fixes a three-repo coordination instead of a two-repo one. Adding
+  *cases* stays safe in the meantime; the restructure that would put the attribute list in
+  the file as normative data is on hold for the same reason.
 - **Naming.** `-server` rather than `-node` is settled and now *earned*: the built artifact
   is executed under Node, Deno, Bun and Workers in CI. Formally Darryl's call until first
   publish.

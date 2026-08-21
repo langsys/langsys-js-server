@@ -882,8 +882,32 @@ Flagged rather than merged, per the instruction. The owner's choice is not symme
 
 ### DECIDED — converge on PHP's 27
 
-Darryl's call, 2026-08-21. **PHP's list is the contract. JS adopts the 12.** This package
-implements all **27**.
+Darryl's call, 2026-08-21. **PHP's list is the contract. JS adopts the 12.**
+
+**Corrected 2026-08-21 by the builder, who re-ran the premise instead of inheriting it (rule 6).**
+This section previously said "this package implements all 27" three paragraphs above a constraint
+saying it "must not ship 27 before the client SDKs do." **Both cannot be actioned today**, and the
+contradiction was mine. The published `langsys-js-typescript@0.6.5` carries exactly the 15 — all
+twelve PHP-only names occur **zero** times in `dist/index.mjs` — and the base SDK has the
+convergence in `ROADMAP.md` as **Not started**, blocked on the migration count.
+
+So the resolution is: **27 is the contract; this package implements whatever the client family
+currently ships, and moves with it.** That is 15 today, behind a base-SDK version floor, becoming
+27 when the base SDK ships the 12. Implementing 27 ahead of the client family would make this
+package agree with PHP and disagree with the client it hands off to on **every request** — the
+worse trade, since the hand-off is per-request and PHP interop is deployment-topology.
+
+The divergence that remains is documented rather than discovered: any block carrying one of the
+twelve tokenizes differently here than in PHP until the convergence lands.
+
+Worth recording alongside it, because it is the strongest argument for the decision and neither
+this document nor the discussion that produced it had stated it: the base SDK's own
+`content-block.ts` documents the 15 as a **considered choice** — framework-convention attributes
+"are written by server-rendered templates, and a JS app renders those strings through its own
+components instead." Their roadmap then names exactly why that no longer holds:
+
+> A JS package that renders HTML server-side is the case the comment excludes. Converging on 27
+> is not overriding a considered decision carelessly — it is **a decision whose premise expired.**
 
 That inverts the recommendation directly above, and the inversion is the point: "implement the
 15" was correct *while JS had 15*, because §7's hand-off is a per-request event and PHP interop

@@ -501,15 +501,47 @@ interpolations.** A text run containing expressions stays one run:
 So **token text is stable across capture and inline; only the markup framing moves.** That is what
 makes the design viable.
 
-Combined with Vue's entity finding, the core's canonicalization step is now concretely specified:
+### CORRECTION — do NOT strip comments. Parse them.
 
-1. **Strip HTML comments** before tokenizing. Both frameworks emit them, they differ between
-   capture and inline, and left in they become markup tokens — a server id that never matches the
-   client id, with both sides looking correct in isolation.
-2. **Decode entities** before tokenizing. The client walker reads `textContent` and PHP's
-   `DOMDocument` yields decoded `nodeValue`, so decoded text is the normative form.
+**This section previously instructed the core to strip HTML comments before tokenizing. That is
+wrong, and following it would fragment every React catalog at interpolation boundaries.** The
+React owner disproved it by reading the installed tokenizer rather than reasoning about it.
 
-Both belong in the shared core, not in three adapters.
+Two facts I did not have when I generalized from Vue and Svelte:
+
+1. **The walker already skips comments for free.** A comment node is neither `TEXT_NODE` nor
+   `ELEMENT_NODE`, so `_walkForTokens` never reaches it. Nothing needs stripping.
+2. **Adjacent text nodes are NOT coalesced** — each text node is pushed as its own array entry.
+   And React emits `<!-- -->` **precisely where it has adjacent text children**, omitting them
+   where it does not. Those comments are therefore an exact isomorphism of the client's text-node
+   structure. **They are the boundary record.**
+
+Measured, for `<span>Hello {name}!<br/><b>bold</b></span>`:
+
+| path | text nodes | tokens |
+|---|---|---|
+| client | `"Hello "`, `"Bob"`, `"!"` | `["Hello","Bob","!","bold"]` |
+| `renderToStaticMarkup` | `"Hello Bob!"` | `["Hello Bob!","bold"]` ✗ |
+| `renderToString` | `"Hello "`, `"Bob"`, `"!"` | `["Hello","Bob","!","bold"]` ✓ |
+
+So **`renderToStaticMarkup` is the wrong capture primitive** — stripping those separators is its
+stated purpose, and the separators are identity. Stripping comments in the core would have done
+the same damage to `renderToString` output.
+
+> **The rule is: parse, do not regex.** Parse the captured string into a DOM-shaped tree and run
+> the *same* node-type walk the client runs. Comments are then skipped as nodes while still
+> separating the text nodes either side of them — which is exactly the behaviour needed, and it is
+> also precisely what PHP's `DOMDocument` does. **Never run a separate string tokenizer; two
+> tokenizers is how the catalog fragments.**
+
+Entity decoding stands, for the same reason it always did — parsing yields decoded text, matching
+`textContent` and `nodeValue`. Parsing gets it for free.
+
+**Recorded as a methodology failure, not just a bug.** Two frameworks emitted comment markers that
+looked like noise, so I wrote "strip them" into the core spec as a settled requirement. The third
+framework's measurement showed the same syntax carrying load-bearing information. **Two agreeing
+observations are not a general rule** — and the tell was available: I had no account of *why*
+either framework emitted them, only that both did.
 
 **[OPEN] — the half nobody has measured.** All of this compares *server string against server
 string*. **Nobody has checked what the client walker sees in the live DOM post-hydration**, which

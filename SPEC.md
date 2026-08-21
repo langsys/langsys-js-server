@@ -399,6 +399,89 @@ fallback. Its doc comment carries the general lesson **[VERIFIED]**:
 > shifts every character's offset, so the same phrase pair can collide standalone and not
 > collide here — and changing `category` moves every character into different lanes.
 
+### Canonicalization: the self-rendered string is not the inline string
+
+**[VERIFIED]** by the Vue owner against Vue 3.5.39, running `renderToString`, not reasoning
+about it. Rendering a slot to a string mid-SSR works — and the resulting string differs from what
+the same subtree emits inline, in two ways:
+
+```
+self-rendered: <!--[-->Based on %n% <strong>reviews</strong> &amp; &lt;ok&gt; &quot;quoted&quot;<!--]-->
+inline:                Based on %n% <strong>reviews</strong> &amp; &lt;ok&gt; &quot;quoted&quot;
+```
+
+1. **Fragment anchors `<!--[-->` / `<!--]-->` are unconditional** — even for a single text child,
+   because the slot call returns an array and the throwaway app's root is therefore a fragment.
+   Deterministic, so strippable, but you have to know.
+2. **Entities are escaped.** `&` → `&amp;`, `<` → `&lt;`, `"` → `&quot;`.
+
+**Divergence 2 is a `custom_id` hazard and it has a normative answer.** The client walker reads
+`textContent`, which is **decoded**. PHP's `DOMDocument` also yields decoded text from
+`nodeValue`. So **two of the three implementations already agree on decoded text**, and a
+string-based tokenizer that skips decoding is the odd one out.
+
+> **The canonical form is decoded text.** A string-based tokenizer MUST decode entities before
+> tokenizing, or `Tom & Jerry` produces `Tom &amp; Jerry` on the server and `Tom & Jerry` on the
+> client — two catalog entries, silently, for a phrase whose only sin is an ampersand.
+
+This will not surface on ASCII-clean fixtures. **Put `&`, `<`, `>`, `"`, `'` and `&nbsp;` in the
+conformance set explicitly**, since the failure is invisible without them and every casual test
+corpus omits them.
+
+Both normalizations — anchor stripping and entity decoding — belong in the **shared string→string
+core as an explicit canonicalization step, not in each adapter.** Three adapters normalizing
+independently is three chances to disagree, and the disagreement is silent.
+
+### `<Translate>` slots must not depend on a component-level provide chain
+
+**[VERIFIED]** by the Vue owner, and the most important constraint to come out of open question
+#2 — because it is the one that reaches past the adapter into the consuming app.
+
+A nested render is a fresh app context with no parent chain. Measured:
+
+| | `app.provide()` | component `provide()` |
+|---|---|---|
+| plain nested app | missing | missing |
+| grafting the parent's `_context` | **works** | missing |
+
+Grafting `appContext` recovers app-level provides. **Nothing recovers component-level ones** —
+they live on the instance chain, and a nested root has no parent by construction.
+
+So any component inside a `<Translate>` slot that injects from an ancestor *component* — a layout
+providing theme, a form context, anything using `provide()` rather than `app.provide()` — silently
+receives its fallback default, or throws if it has none.
+
+**The failure is invisible in the same way the original SSR defect was: it renders, it just
+renders wrong.** No exception on the happy path, no failed request.
+
+The constraint is documentable and worth stating as a rule: **scope `<Translate>` to leaf
+content.** That is what you want for tokenization anyway, so the two constraints point the same
+direction — mildly reassuring about the design rather than a compromise forced on it.
+
+**[OPEN]** This is *not* Vue-specific in shape. Any framework using a nested-render strategy has
+some version of it. React context and Svelte context must be asked about **specifically**, and
+the question to ask is about **context propagation, not async** — the async-ness turned out to be
+the least consequential of Vue's findings.
+
+### Vue is the async one, and the sync path exists but is walled off
+
+**[VERIFIED]**: `renderToString` is declared `async`, so it returns a Promise regardless;
+`renderToSimpleStream` opens with `Promise.resolve(...).then(...)`, deferring even the sync path
+to a microtask. Confirmed empirically as not settled immediately after the call.
+
+Vue 3.5 *does* carry synchronous unroll machinery internally — buffers have a `hasAsync` flag and
+`unrollBufferSync` handles the all-strings case. **Nothing sync is exported.** Worth recording
+precisely, because it changes any future upstream request from "build a sync path" to "export the
+one you have."
+
+The string→string core absorbs this: the adapter awaits, the core does not care.
+
+**[OPEN]** `async setup()` requires `<Suspense>` on the **client**. SSR handles it natively — that
+is what was measured — but hydration was not tested. If `<Translate>` carries `async setup()`
+unconditionally, every consuming Vue app inherits a Suspense requirement, which would be a real
+API imposition. The presumed fix is a server-only branch so the client component never becomes
+async. **Not built, not asserted.** The Vue owner has offered to test it.
+
 ### Pinning the attribute list is necessary and not sufficient
 
 Established by the PHP owner, **by mutation rather than by watching tests go green**, and
@@ -1054,7 +1137,7 @@ Do not begin building the affected section until these are resolved.
 | # | Question | Section | Owner |
 |---|---|---|---|
 | 1 | ~~Is ALS-based scoping sufficient, or does other module state leak per request?~~ **ANSWERED §3.1.** `persist()` is clean; five other pieces of module state leak, incl. the API auth header. Importing the base SDK at all instantiates the singleton graph. | §3.1 | base SDK ✅ |
-| 2 | Can Svelte 5 / React / Vue each render a child tree to a string at render time, and at what cost? | §3.3 | framework SDKs + reference deployment |
+| 2 | **Vue ANSWERED §5 by execution.** Yes, via `async setup()` + a throwaway app. Genuinely async (sync machinery exists internally, unexported). Two string divergences — fragment anchors and **entity escaping** — both belonging in the core's canonicalization, with decoded text as the normative form. The finding that matters: **component-level `provide()` does not cross a nested render**, which is a constraint on the consuming app, not on the adapter. React and Svelte still open, and the question to ask them is **context propagation**, not async. | §3.3 | React + Svelte owners |
 | 3 | Can the tokenizer produce byte-identical tokens from an HTML string as from a DOM? Prove on fixtures before committing. | §5 | this package + PHP |
 | 4 | ~~Should registration be attempted under a read-only key?~~ **ANSWERED §6.** Refuse locally, return success, log unconditionally (the SDK's own precedent gates the log on `debug` — do not copy that). | §6 | base SDK ✅ |
 | 5 | Can client SDKs seed synchronously before hydration? **PARTIALLY ANSWERED §7** — the blocker is that `init()` seeds *after* `await validate()`, not the mount hook. A `seedCatalog()` export is proposed. Per-framework hydration timing is still open. | §7 | client SDKs |

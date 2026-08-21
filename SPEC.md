@@ -849,11 +849,29 @@ decision as permission to implement ahead of the dependency.**
 
 **[OPEN] — the migration, which is the real cost and is not this package's call.** A
 JS-registered block whose subtree carries any of the twelve changes `custom_id` when this ships,
-orphaning its catalog entry. `generateLegacyCustomId` is the precedent and the mechanism —
-lookup-only fallback under the old id — but it is already marked
-`@deprecated — will be removed once catalogs have been rebased`. Adding a second creates a chain
-of two, and a chain is harder to retire than either link. **Rebasing once may be cheaper than
-carrying a second fallback forever.**
+orphaning its catalog entry.
+
+**The blast radius is narrow and, crucially, it is queryable.** A block re-keys **only** if its
+subtree carries one of the twelve *with a non-empty value*; every other block's `tokens[]` is
+byte-identical and its `custom_id` unchanged. So the affected set is exactly: content blocks
+whose stored `content` HTML contains any of the twelve attribute names.
+
+That turns the decision from a judgement about deprecation debt into a **lookup**. Get the count
+out of the Translation Manager before choosing a mechanism — "carry a fallback indefinitely" and
+"rebase once" have very different prices at 4 blocks than at 4,000, and nobody who has discussed
+this so far has the number.
+
+**A distinction worth preserving when describing the debt.** A fallback added here would *not*
+be a second `generateLegacyCustomId`. That one exists because the **hash input encoding** changed
+(`tokens.join('-')` → `JSON.stringify`), which is why its doc comment insists on reasoning about
+the final hashed string rather than the phrase. This would instead be the *same*
+`generateCustomId` applied over a **shorter attribute list** — a second token *derivation*, not a
+second hash.
+
+Both are links in a chain, and a chain is harder to retire than either link. But they are links
+of different kinds, and calling both "a legacy id" would make the eventual retirement harder to
+reason about than it needs to be: retiring the encoding fallback requires rebasing every block,
+while retiring a derivation fallback requires rebasing only blocks carrying those attributes.
 
 **One constraint this package should adopt regardless:** PHP's list is runtime-mutable via
 `setTranslatableAttributes()`, which makes `custom_id` a function of *configuration* rather than

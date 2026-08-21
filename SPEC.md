@@ -501,6 +501,85 @@ interpolations.** A text run containing expressions stays one run:
 So **token text is stable across capture and inline; only the markup framing moves.** That is what
 makes the design viable.
 
+### React: don't capture a string at all — walk the element tree
+
+**[VERIFIED]** by the React owner against React 19.2.7. Nested rendering works cleanly — no
+re-entrancy complaint, and `useId` is **not** perturbed (the nested pass gets its own counter, and
+the outer sequence is byte-identical to a baseline without one). But two walls and one loss make
+string capture the wrong strategy for React specifically.
+
+**Context is lost**, exactly as in Vue: the nested render is a fresh root with no provider chain,
+so a child reading context renders differently captured than inline — silently. This is now
+**confirmed in two frameworks independently** and should be treated as a property of nested-render
+strategies generally, not a per-framework quirk.
+
+**RSC — two walls, and the second is worse than the first.**
+
+- **Server Component `<Translate>`: hard-impossible.** Under the `react-server` export condition
+  `react-dom/server` is not importable at all — every server entry routes to a stub that throws.
+  Verified by execution with `node --conditions=react-server`. Not suppressible; the module
+  resolves to a thrower.
+- **Client Component with server children: silent.** *(reasoned by the React owner, not run.)*
+  In the SSR pass `react-dom/server` is available so nothing throws, but children crossing a
+  Server→Client boundary arrive as lazy Flight references — structurally identical to the async
+  case they *did* measure, where the capture returned the Suspense **fallback** string with no
+  error and no warning. **Wall 1 fails at import; Wall 2 mis-keys the catalog and says nothing.**
+
+**The recommendation, and it is a different adapter shape from Svelte and Vue:** do not render to
+a string. **Walk the `children` element tree as data.** A React element tree is plain data —
+`string | number` is a text token, an element tokenizes `props` by attribute name and recurses into
+`props.children`. That reproduces the DOM walker structurally and dodges every problem at once:
+
+- no string round-trip, so the separator/coalescing question never arises — one token per text
+  child by construction
+- **synchronous and RSC-agnostic**: no `react-dom/server` import, so Wall 1 disappears entirely and
+  a Server Component `<Translate>` becomes possible
+- no context loss, because nothing is re-rendered
+- a lazy or function-component child is **detectable** (`$$typeof === Symbol.for('react.lazy')`),
+  so the adapter can **fail loudly instead of silently mis-keying** — the single most valuable
+  property here, given both walls above
+
+Limitation: a function component in `children` cannot be walked without rendering it. **Make that
+a hard error rather than a fallback.** `<Translate>` children are markup by contract, and silent
+mis-keying is the worse outcome.
+
+**This is the strongest validation of the adapter architecture so far.** Three frameworks, three
+genuinely different capture mechanisms — Svelte a synchronous re-entrant `render()`, Vue an async
+throwaway app, React a data walk with no renderer at all. A single shared mechanism would have had
+to be the worst of the three.
+
+### [OPEN] The base SDK's non-coalescing behaviour must become a stated contract
+
+Raised by the React owner and it is the most consequential open item to come out of #2.
+
+`custom_id` identity depends on **adjacent text nodes not being coalesced** — each text node is its
+own token. That is currently an *implementation detail* of `langsys-js-typescript`'s walker, not a
+documented contract. Once this package, the client SDKs and PHP are all keyed off it, **a
+reasonable-looking "coalesce adjacent text nodes" cleanup upstream silently re-keys every
+catalog in existence.**
+
+It needs to be stated as a contract in the base SDK, with a test that fails if it changes, before
+three packages depend on it. The React owner has offered to raise it.
+
+### [OPEN] Nobody has measured the client DOM
+
+Every framework answer above compares **server output against server output**, or against a reading
+of the tokenizer. **No one has checked what the client walker actually sees in a live hydrated
+DOM** — which is the other half of `custom_id` identity, and the half that decides whether any of
+this works.
+
+Two specific reasons it cannot be assumed:
+
+- React's separators are an isomorphism of the client's text-node structure *in the SSR string*.
+  Whether the hydrated DOM presents the same node boundaries is a different question.
+- Svelte's captured text runs stay whole (`"Hello Sarah world, you have 3 items"` is **one** token),
+  while React's split at every interpolation (**three** tokens for the equivalent). If Svelte's
+  client DOM splits where its server string does not, the Svelte adapter has React's problem in
+  mirror image.
+
+**A browser test is required before any adapter is trusted.** This is the highest-value unresolved
+item in the specification.
+
 ### CORRECTION — do NOT strip comments. Parse them.
 
 **This section previously instructed the core to strip HTML comments before tokenizing. That is

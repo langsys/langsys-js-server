@@ -432,6 +432,92 @@ Both normalizations — anchor stripping and entity decoding — belong in the *
 core as an explicit canonicalization step, not in each adapter.** Three adapters normalizing
 independently is three chances to disagree, and the disagreement is silent.
 
+### Svelte: synchronous, but capture re-executes exponentially
+
+**[VERIFIED]** by the Svelte owner against **5.55.8**, compiled with `generate: 'server'` and run
+in Node. No inference in any of it.
+
+**Yes, and synchronous.** `render()` from `svelte/server` is re-entrant; a snippet needs wrapping
+in a throwaway component because `render()` takes a component. Two caveats:
+
+- **The wrapper depends on the snippet's internal calling convention** — in 5.55.8 a snippet takes
+  the renderer object; in earlier 5.x it was `$$payload`. **Not public API, and it has already
+  changed once within Svelte 5.** Any adapter built on this must pin and test against the Svelte
+  version rather than assume forward compatibility.
+- **`render()` is lazy.** It returns immediately and `.body` is evaluated on access, so "did it
+  run yet" and "did I call render yet" are different questions. Their first harness measured this
+  wrong and reported a callback as never firing.
+
+**The finding to design around: nested capture re-executes the subtree 2^depth times.** Measured
+with one side-effecting leaf at capture-depth 3:
+
+```
+capture invocations, in order : L3 L2 L3 L1 L3 L2 L3
+side-effecting leaf executed  : 8 times, for ONE leaf
+```
+
+**For `<Translate>` this is a correctness problem, not a performance note**, because the captured
+subtree contains `t()` calls and **`t()` registers missing tokens as a side effect**. Three nested
+blocks would fire eight registration passes over the innermost content.
+
+> **Requirement:** capture must be memoised per snippet identity, **or** token registration must be
+> suppressed during capture passes and run only on the emitting pass. This interacts directly with
+> §6 — a request-scoped miss queue that dedupes before sending absorbs the damage, but dedup is a
+> mitigation and suppression is the fix.
+
+**[OPEN]** Whether Vue's nested-`createApp` strategy has the same multiplication. The mechanisms
+differ enough that it does not follow, and it was not measured.
+
+### The cross-framework synthesis: strip comments, decode entities
+
+Two independent measurements, two frameworks, same shape:
+
+| | Emits | Must be stripped before hashing |
+|---|---|---|
+| Vue 3.5.39 | `<!--[-->` / `<!--]-->` fragment anchors, unconditional | yes |
+| Svelte 5.55.8 | `<!--[-->`, `<!---->`, `<!--]-->` boundary markers | yes |
+
+Svelte's three-way comparison shows the instability is not even introduced by capture — it is
+already there:
+
+```
+captured : <!--[--><!---->Hello <strong>bold</strong> … tail<!--]-->
+inline   :          <!---->Hello <strong>bold</strong> … tail<!---->
+literal  :                 Hello <strong>bold</strong> … tail
+```
+
+Passing a subtree as `children` adds anchors that writing the same markup inline does not. **"The
+same subtree" is not byte-stable in Svelte before string capture enters the picture at all.**
+
+**The reassuring half, and it was tested specifically because it is the difference between
+cosmetic and catastrophic: anchors mark component, snippet and block boundaries — not
+interpolations.** A text run containing expressions stays one run:
+
+```
+<Capture>Hello {name} world, you have {3} items</Capture>
+  -> text runs: ["Hello Sarah world, you have 3 items"]      one, not five
+```
+
+So **token text is stable across capture and inline; only the markup framing moves.** That is what
+makes the design viable.
+
+Combined with Vue's entity finding, the core's canonicalization step is now concretely specified:
+
+1. **Strip HTML comments** before tokenizing. Both frameworks emit them, they differ between
+   capture and inline, and left in they become markup tokens — a server id that never matches the
+   client id, with both sides looking correct in isolation.
+2. **Decode entities** before tokenizing. The client walker reads `textContent` and PHP's
+   `DOMDocument` yields decoded `nodeValue`, so decoded text is the normative form.
+
+Both belong in the shared core, not in three adapters.
+
+**[OPEN] — the half nobody has measured.** All of this compares *server string against server
+string*. **Nobody has checked what the client walker sees in the live DOM post-hydration**, which
+is the other half of `custom_id` identity. Comment nodes are a separate DOM node type and a
+text-node walker should skip them, so it is *expected* to line up — but that is inference, and it
+is precisely the kind this project has been repeatedly wrong about. **A browser test is required
+before anyone relies on it.**
+
 ### `<Translate>` slots must not depend on a component-level provide chain
 
 **[VERIFIED]** by the Vue owner, and the most important constraint to come out of open question
@@ -1137,7 +1223,7 @@ Do not begin building the affected section until these are resolved.
 | # | Question | Section | Owner |
 |---|---|---|---|
 | 1 | ~~Is ALS-based scoping sufficient, or does other module state leak per request?~~ **ANSWERED §3.1.** `persist()` is clean; five other pieces of module state leak, incl. the API auth header. Importing the base SDK at all instantiates the singleton graph. | §3.1 | base SDK ✅ |
-| 2 | **Vue ANSWERED §5 by execution.** Yes, via `async setup()` + a throwaway app. Genuinely async (sync machinery exists internally, unexported). Two string divergences — fragment anchors and **entity escaping** — both belonging in the core's canonicalization, with decoded text as the normative form. The finding that matters: **component-level `provide()` does not cross a nested render**, which is a constraint on the consuming app, not on the adapter. React and Svelte still open, and the question to ask them is **context propagation**, not async. | §3.3 | React + Svelte owners |
+| 2 | **Vue ANSWERED §5 by execution.** Yes, via `async setup()` + a throwaway app. Genuinely async (sync machinery exists internally, unexported). Two string divergences — fragment anchors and **entity escaping** — both belonging in the core's canonicalization, with decoded text as the normative form. The finding that matters: **component-level `provide()` does not cross a nested render**, which is a constraint on the consuming app, not on the adapter. React and Svelte still open, and the question to ask them is **context propagation**, not async. | §3.3 | React owner (Svelte + Vue ✅) |
 | 3 | Can the tokenizer produce byte-identical tokens from an HTML string as from a DOM? Prove on fixtures before committing. | §5 | this package + PHP |
 | 4 | ~~Should registration be attempted under a read-only key?~~ **ANSWERED §6.** Refuse locally, return success, log unconditionally (the SDK's own precedent gates the log on `debug` — do not copy that). | §6 | base SDK ✅ |
 | 5 | Can client SDKs seed synchronously before hydration? **PARTIALLY ANSWERED §7** — the blocker is that `init()` seeds *after* `await validate()`, not the mount hook. A `seedCatalog()` export is proposed. Per-framework hydration timing is still open. | §7 | client SDKs |

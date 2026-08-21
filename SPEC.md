@@ -354,6 +354,20 @@ passing through a PHP layer that calls `translatePage()`, has its kept-whole sen
 re-split — the precise failure §3.2 exists to prevent, arriving from the one direction nobody
 is watching.
 
+**The JS side of this costs nothing — confirmed by the base SDK owner. [VERIFIED]**
+`isPhraseMarked()` tests **both** spellings (`src/content-block.ts:121-127` over
+`PHRASE_MARKER_ATTRS = ['data-ls-phrase', 'data-langsys-phrase']`, `:81`), with identical
+`="false"`/`="0"` opt-out semantics on either. Only *writing* is single-spelling —
+`PHRASE_MARKER_ATTR = 'data-ls-phrase'` (`src/phrase.ts:9`). So a subtree marked
+`data-langsys-phrase`, or marked with both, is skipped by the JS walker exactly as one marked
+`data-ls-phrase` is.
+
+One thing worth stating so nobody has to wonder: **the marker attribute does not enter
+`tokens[]` and cannot change a `custom_id`.** Attribute harvesting reads only
+`TRANSLATABLE_ATTRIBUTES` by name (#11 above), and a marked element is skipped before
+harvesting anyway. Emitting both spellings changes only the `content` snapshot string, which is
+the translator-facing HTML, not the identity. **Emitting both is free on the JS side.**
+
 **Recommendation.** This package emits **`data-langsys-phrase`** — the spelling both other
 implementations understand — and may emit `data-ls-phrase` alongside it. Emitting only the JS
 spelling is the single combination that is silently wrong in a topology that ships today.
@@ -421,6 +435,32 @@ run in CI by `langsys-php`, `langsys-js-typescript` and this package. Minimum co
 - self-closing and void elements
 - attributes carrying translatable values (§9)
 - identical content under different categories, asserting the ids differ
+
+#### Open question #11, answered — the JS walker iterates the CONSTANT
+
+**No divergence, and no defect. [VERIFIED]** by reading `_tokenizeAttributes`
+(`src/content-block.ts:349-392`) at `0.6.5`:
+
+```ts
+for (const attr of TRANSLATABLE_ATTRIBUTES) {
+    const value = element.getAttribute(attr)?.trim();
+    if (value) tokens.push(normalizeMarkupPlaceholders(value));
+}
+```
+
+It iterates the configured list and pulls each value by name. `element.attributes` is never
+enumerated, so **attribute order in the author's source cannot affect the id** — the same
+property PHP has. `<img title alt>` and `<img alt title>` produce identical tokens in both.
+
+**And `value` sits after all 15 in JS too**, matching PHP: the constant loop runs first, then
+`VALUE_TRANSLATABLE_ELEMENTS` (`<button>`), then the `<input type=submit|button>` case
+(`:362-372`). So §9's list parity extends to emission order for the attributes both
+implementations share.
+
+This was the right question to ask — it just happens to come back clean. The remaining
+attribute-side risk is not ordering but **coverage**: PHP's list has 12 entries JS does not,
+so any element carrying one of those twelve tokenizes differently. That is #7's territory, not
+#11's, and it is a real divergence where this one was not.
 
 Added by the base SDK owner, from the walker's actual behaviour
 (`src/content-block.ts:313-395`) — these are the places three implementations can plausibly
@@ -884,8 +924,8 @@ Do not begin building the affected section until these are resolved.
 | 8 | `-server` or `-node`? | §11 | Darryl |
 | 9 | **NEW.** How does this package consume the base SDK's pure functions without importing its singleton graph — vendor-with-conformance-test, or request `sideEffects: false` + a `/pure` subpath export? | §3.1 | base SDK + this package |
 | 10 | ~~Does PHP's tokenizer retain `&nbsp;` (U+00A0)?~~ **ANSWERED §5 — yes, they diverge.** PHP normalises ASCII whitespace only; a bare `&nbsp;` text node is a token in PHP and absent in JS, so the token *count* differs. Which behaviour wins is a product decision, not an SDK one. | §5 | PHP ✅ / Darryl |
-| 11 | **NEW.** Does the JS walker iterate the `TRANSLATABLE_ATTRIBUTES` constant or `element.attributes`? PHP iterates the constant, so attribute order in the source does not affect the id. If JS iterates the element, reordering two attributes changes the id in JS only. Also: where does `value` sit in the JS emitted order? PHP puts it after all 15. | §5 | base SDK |
-| 12 | **NEW.** `data-ls-phrase` is unrecognised by `langsys-php`, and PHP's `isPhraseMarked()` is never called by PHP's tokenizer (only by `translatePage()`). Which spelling does this package emit, and does PHP learn the JS one? Live today: the reference deployment is adapter-node behind a PHP proxy. | §4 | PHP + Darryl |
+| 11 | ~~Does the JS walker iterate the constant or `element.attributes`?~~ **ANSWERED §5 — clean.** JS iterates `TRANSLATABLE_ATTRIBUTES` by name, so source attribute order cannot affect the id, and `value` is emitted after all 15. Matches PHP on both counts. The attribute-side risk is #7's coverage gap, not ordering. | §5 | base SDK ✅ |
+| 12 | `data-ls-phrase` is unrecognised by `langsys-php`, and PHP's `isPhraseMarked()` is never called by PHP's tokenizer. Which spelling does this package emit, and does PHP learn the JS one? **JS side answered §4: reading accepts both spellings, the marker never enters `tokens[]`, so emitting both is free.** Whether PHP learns the JS spelling stays open. | §4 | PHP + Darryl |
 
 ---
 
@@ -942,4 +982,5 @@ result and should not be disguised as a review.
 | 2026-08-21 | `langsys-skill` agent | Initial draft from the SSR design discussion |
 | 2026-08-21 | `langsys-js-typescript` agent (base SDK) | Answered open questions #1 and #4; partially answered #5. Corrected two wrong `[VERIFIED]` citations in §3.4 and one in §1. Added seven tokenizer-parity fixture requirements to §5, incl. token *ordering* as part of `custom_id` identity. Confirmed §9's attribute list against source. Raised two new open questions (#9, #10). |
 | 2026-08-21 | `langsys-php` agent (reference impl.) | Answered #6, #7 and #10 by **executing** the PHP tokenizer, not reading it. #10: PHP retains U+00A0 — the arrays print identically and hash differently. #6: the premise was wrong, PHP never had the multi-worker problem. #7: 15 match in order, PHP has 12 more. Corrected §4 — `data-ls-phrase` is unrecognised in PHP and `isPhraseMarked()` is never called by PHP's tokenizer. Added four PHP-side parity constraints to §5 incl. the runtime-mutable attribute list. Qualified §1's "PHP is presumed correct" tiebreak, which this pass breaks twice. Raised #11 and #12. |
+| 2026-08-21 | `langsys-js-typescript` agent (base SDK, 2nd pass) | Answered #11: **clean** — the JS walker iterates the `TRANSLATABLE_ATTRIBUTES` constant by name, not `element.attributes`, so source attribute order cannot affect the id, and `value` is emitted after all 15. Matches PHP on both counts. Answered the JS half of #12: `isPhraseMarked()` accepts both spellings with identical opt-out semantics, and the marker never enters `tokens[]`, so emitting both costs nothing on identity. |
 | 2026-08-21 | `langsys-skill` agent (final review) | Independently confirmed §4's marker asymmetry against the **published Packagist artifact** rather than the working tree it came from — `isTranslationExcluded` has five call sites including the tokenizer, `isPhraseMarked` has one and is not in the identity path. Named the structural lesson: mirrored predicates are not a symmetric contract, which is the reasoning §4 originally rested on. Added §5 sequencing — the first divergent fixture is blocked on decisions #10/#11/#12, because a fixture here encodes a decision rather than records a fact. Added rules 8 and 9 to §10. Restored review-log chronology. |

@@ -106,6 +106,28 @@ look for. A runtime that is not installed reports `SKIPPED`, never a pass.
 
 ---
 
+## Try it
+
+A runnable SvelteKit example lives in [`example/`](./example), with a mock Langsys API so
+it works offline:
+
+```bash
+npm run example:install
+npm run test:e2e        # boots the built app and runs the SPEC §13 acceptance tests
+```
+
+Or run it by hand and look at the served bytes — which is the only place the difference
+shows:
+
+```bash
+curl -s http://localhost:5570/it | grep '<h1'   # L'idratazione inizia con un'acqua migliore.
+curl -s http://localhost:5570/ru | grep bottles # 3 бутылки  (the Russian FEW form)
+```
+
+The example is not published — `files` keeps it out of the npm tarball.
+
+---
+
 ## Quick start
 
 ```ts
@@ -320,6 +342,10 @@ Concretely, in this repo:
 - **Cross-runtime identity is compared, not assumed.** Four runtimes, same digests. The
   comparison itself is mutation-tested: injecting a runtime-varying value is caught even
   though every runtime still passes its own checks.
+- **The acceptance suite is mutation-tested against the original defect.** Removing the
+  `langsys.run()` wrapper from the example's `hooks.server.ts` — reproducing exactly the
+  bug this package exists to fix — fails five e2e tests including §13.1. A suite that has
+  never been shown to fail has not been shown to work.
 
 ### The failure mode all of this exists to prevent
 

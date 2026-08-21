@@ -34,6 +34,10 @@ server rendering.
   SKIPPED, never a pass.
 - `tests/build-output.test.ts` — assertions about the built artifact rather than the
   source, because a build step can silently falsify a claim the source makes correctly.
+- `example/` — a runnable SvelteKit app with a mock Langsys API, and `tests/e2e/` which
+  boots its built adapter-node output and asserts SPEC §13's definition of done:
+  Italian body copy in the served bytes, Russian plurals, 120 interleaved requests
+  without cross-contamination, and harvesting outside the TTFB path. Not published.
 
 ### Fixed (pre-release)
 

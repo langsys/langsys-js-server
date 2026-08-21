@@ -660,6 +660,59 @@ sibling safely, and it should be reused wherever else this package has to. **[OP
 siblings: whether the walkers are fixed and case `[12]` re-baselined, which is a catalog migration
 of the same kind as §9's.
 
+### §5 has TWO pipelines, not one — and the contract governs only one of them
+
+**This reshapes the fixture set rather than extending it.** Found by the React owner, verified
+independently by the Svelte owner, and confirmed here against published `0.6.5`.
+
+The base SDK has **two identity mechanisms with opposite text handling**, both shipped:
+
+| Path | Mechanism | Adjacent text | Artifact |
+|---|---|---|---|
+| `<Translate>` | `_walkForTokens` | **NOT coalesced** — arity is identity | `tokens[]` → `custom_id` |
+| `<Phrase>` | `encodeRichText` | **coalesced**, whitespace collapsed | an encoded **phrase string** |
+
+Verified in `dist/index.mjs`: `:1599` accumulates adjacent text (`out += node.nodeValue ?? ""`),
+`:1593` collapses and trims (`phrase.replace(/\s+/g, " ").trim()`), `:1606` wraps markup as
+`{m0o}`/`{m0c}`. `<Phrase>` produces **no content block at all** — no `tokenizeElement`, no
+`generateCustomId`, no `custom_id`. It does a plain `Translations.t(phrase, category)` lookup.
+
+> **So "never coalesce adjacent text nodes" is correct for the `<Translate>` path and actively
+> wrong for the `<Phrase>` path.** On the rich-text path, coalescing is not the hazard — it is the
+> intended behaviour.
+
+**Why this is a framing problem and not a missing fixture.** A fixture set that encodes "never
+coalesce" is correct in every case it contains and teaches a wrong general rule. The Svelte owner's
+statement of the risk is the one to keep:
+
+> The danger is not a server implementation getting `<Phrase>` wrong on its own terms. It is an
+> implementer who has **internalised the contract**, meets `encodeRichText`, recognises it as the
+> exact defect they were warned about — and corrects it.
+
+That is the absence pattern one level up, and the React owner's framing of the escalation is exact:
+
+> **A fixture without its control can *pass* for the wrong reason. A fixture set without its scope
+> can be *obeyed* for the wrong reason.** The first exports a weak test; the second exports a wrong
+> belief — and the second is harder to catch, because every individual fixture still passes.
+
+**Three consequences for §5's structure:**
+
+1. **Tag every fixture by path** — `content-block` vs `rich-text-phrase`. Not one flat identity
+   suite. A consumer must be able to tell which rule it is implementing.
+2. **The rich-text path needs its own inverse fixture** — one that fails if someone *removes*
+   coalescing from `encodeRichText`. Everything pinned so far protects against coalescing being
+   **added**; nothing protects the path where it is **required**. That asymmetry is precisely how
+   the misapplication ships green.
+3. **`<Phrase>` fixtures assert on the encoded phrase string** — `"Based on {n} {m0o}reviews{m0c}"`
+   — not on a token array or an id. **A fixture runner assuming `(html → tokens[] → custom_id)`
+   uniformly cannot express them at all.** This is load-bearing for the file format: the shape §5
+   has been converging on assumes one pipeline, and there are two.
+
+**Evidence the distinction is not obvious from the code:** `langsys-js-svelte@3.6.5` shipped the
+right advice with the wrong mechanism named, corrected in `3.6.6`. Two agents made and caught the
+same error independently within a day. Anyone implementing against this specification should expect
+to make it too.
+
 ### Fixture design rule: every absence needs a paired presence
 
 Case 5's control is the point, and it must not be dropped when this becomes a file.

@@ -520,6 +520,29 @@ ambiguity is what let the original defect survive in four documents.
 
 ## 14. Review log
 
+### How to record your pass
+
+This document is edited by several agents in sequence, and the record of *who changed what*
+is part of its value — a later reader needs to know whether a claim came from the package
+that owns the code or from someone reasoning about it from outside.
+
+So:
+
+1. **Edit the document directly.** It is shared, not anyone's draft to defend.
+2. **Commit your own pass, alone.** One commit per reviewer, containing only that reviewer's
+   changes. Do not fold your edits into someone else's commit or leave them uncommitted for
+   the next reviewer to inherit.
+3. **Name yourself in the commit subject** — e.g. `Base SDK review pass: …`.
+4. **Say what you changed and why in the body**, especially any `[VERIFIED]` tag you removed
+   or downgraded. A tag that was wrong is more important to record than a section that was
+   added.
+5. **Add a row below** before you finish.
+
+If you find you have nothing to change, commit nothing and say so — an empty pass is a real
+result and should not be disguised as a review.
+
+### Passes
+
 | Date | Reviewer | What changed |
 |---|---|---|
 | 2026-08-21 | `langsys-skill` agent | Initial draft from the SSR design discussion |

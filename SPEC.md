@@ -843,8 +843,85 @@ blocks: served and hydrated trees are structurally identical, only the text diff
 2. **A server tokenizer is safe only on a subtree whose text runs are static.** If a `<Translate>`
    subtree contains non-static interpolation, the server must render byte-identical values to the
    client or the ids diverge.
-3. **Detect non-static interpolation and refuse, or warn — do not emit an id that will not match.**
-   This is the cheap guard, and it is the one that converts a silent re-key into a message.
+3. **Detect any non-static CONSTRUCT and refuse, or warn — do not emit an id that will not match.**
+   Amended after measurement: detecting *interpolation* is necessary and **not sufficient**.
+   `{#each}` and `{#if}` change the token array with no interpolation present —
+   `{#if show}yes{/if}` is a static string that appears or does not. The guard must cover
+   interpolations, `{#each}`, `{#if}`, `{#await}`, and interpolated values on translatable
+   attributes. **The common property is that the token array is a function of runtime data, and
+   identity assumes it is not.**
+
+### Divergence measured properly: different props, not a state change
+
+The reference deployment improved on the requested measurement. Rather than mutating state after
+hydration, they rendered SSR with one set of props and hydrated with a **different** set — which is
+the real shape of the hazard: the server renders with the data it has, the client with the data it
+has, and they disagree. **Baseline (same props) matched exactly on all five cases**, so nothing
+below is Svelte failing to hydrate.
+
+| case | shape | ssr → hyd text nodes | ssr → hyd tokens | id |
+|---|---|---|---|---|
+| e1 | `{#each}` text body | 3 → **2** | `[alpha,beta,gamma]` → `[alpha,beta]` | ❌ |
+| e2 | `{#each}` `<span>` per item | 0 → 0 | `[alpha,beta,gamma]` → `[alpha,beta]` | ❌ |
+| f1 | `{#if}` **element** branch | **2 → 2** | `[before,yes,after]` → `[before,after]` | ❌ |
+| f2 | `{#if}` **text** branch | 3 → **2** | `[before,yes,after]` → `[before,after]` | ❌ |
+| a1 | `alt`/`title`/`placeholder` | 0 → 0 | 3 tokens → 1 | ❌ |
+
+**No hydration warning fired.** Svelte 5 hydrated a three-item server list against two-item client
+state and said nothing. The renderer does not flag this either — the silence is total.
+
+### Node counts are the check that lies
+
+**Row f1 is the one to read.** SSR text nodes 2, hydrated text nodes 2 — *identical* — while the
+token array goes 3 → 2. The lost token lived inside the `<em>` the branch removed:
+
+```
+hydrated f1 childNodes:
+  #comment ""   #text "before"   #comment "[0"   #comment "]"   #text "after"
+```
+
+> **Counting text nodes is not sufficient to detect divergence, and it was the measurement this
+> specification originally asked for.** It reports "2 = 2, no change" on the one case that
+> re-keys. Anything the walk descends into — an element branch, a nested span, an attribute — can
+> add or remove tokens without touching the host's direct child text nodes.
+>
+> **Compare token arrays. Never node counts.** Node-counting is the intuitive check and it is the
+> one that lies.
+
+### Attributes: same failure, and the DOM actively conceals it
+
+Attributes harvest by fixed-order lookup rather than by walking, but the guard has the same shape —
+`const value = element.getAttribute(attr)?.trim(); if (value) tokens.push(...)` — so an **empty
+value is dropped and arity collapses exactly as for text**.
+
+What makes this the worst of the set: with `altText=''`, Svelte does **not** omit the attribute.
+
+```
+outerHTML:        <img alt="" title="" src="x.png">
+hasAttribute:     true
+value:            ""
+tokens:           3 -> 1,  id changed
+```
+
+Anyone inspecting the element sees `alt` present and concludes the block is intact, while two
+tokens have silently left the array.
+
+### Structure is not hashed — a property worth stating, not discovering
+
+Falls out of the baseline: **e1 and e2 produce the same `custom_id`** despite completely different
+markup (three bare text nodes vs. three `<span>`s each wrapping text), and **f1 and f2 collide**
+likewise. `generateCustomId` hashes `[category, tokens]`, and element nodes contribute nothing to
+the walk, so element type, nesting depth and structure are **entirely absent from identity**.
+
+- **Favourable for this package:** an adapter whose markup differs from the client's — different
+  wrapper element, extra nesting, different whitespace handling — **still produces a matching id,
+  provided the text sequence is identical.** That is a far weaker constraint than byte-identical
+  DOM: the adapter must reproduce the client's *text*, not its *markup*.
+- **Unfavourable:** two genuinely different blocks in the same category with the same text sequence
+  collide on one id. Likely rare; worth stating rather than discovering.
+
+**[OPEN]** Still unmeasured, offered: `{#await}`, `{#key}`, and a whitespace/`preserveWhitespace`
+pass.
 
 **[OPEN]** Three shapes not yet covered by the harness, offered by the reference deployment:
 `{#if}` inside a `<Translate>`, `{#each}`, and attribute interpolation. Worth requesting before the

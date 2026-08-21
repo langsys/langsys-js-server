@@ -906,6 +906,71 @@ tokens:           3 -> 1,  id changed
 Anyone inspecting the element sees `alt` present and concludes the block is intact, while two
 tokens have silently left the array.
 
+### `{#await}` — where tokenizer agreement is affirmatively misleading
+
+**The one construct that satisfies this specification's acceptance property while producing a
+wrong result.** Measured by the reference deployment.
+
+`render()` from `svelte/server` is **synchronous**, so it cannot await anything. The server emits
+the **pending branch 100% of the time**, for every `{#await}` block, regardless of promise state —
+including `Promise.resolve()`. The client's first render is also pending, because a promise settles
+in a microtask at the earliest and hydration is synchronous.
+
+| moment | already-resolved promise | 10 ms promise |
+|---|---|---|
+| SSR HTML | `["loading"]` `32c2cb83` | `["loading"]` `32c2cb83` |
+| right after `hydrate()` | `["loading"]` `32c2cb83` | `["loading"]` `32c2cb83` |
+| microtask | `["got ALPHA"]` `5ff7466e` | `["loading"]` |
+| 50 ms | `["got ALPHA"]` | `["got BETA"]` `68404779` |
+
+**Tokenization happens at mount**, in the constructor, and never again — the only re-entry is
+`currentlyLoadedLocale.subscribe(...)` → `translateUpdate()`, which does **not** re-tokenize, and
+there is no MutationObserver. So:
+
+- **the registered block is the loading placeholder.** The real content is never registered, never
+  sent to translators, never translated;
+- **every `{#await}` sharing a pending string collapses onto ONE content block** — all of them
+  `32c2cb83` for `loading`.
+
+> **This is why the acceptance property is insufficient.** Every other divergence in this
+> specification manifests as *server tokens ≠ client tokens*, which the adapter can detect.
+> `{#await}` **satisfies** that check — both sides tokenize `["loading"]`, both hash to
+> `32c2cb83`, and Svelte emits no hydration warning because server and client genuinely agree.
+> There is no mismatch to find, and the block is still wrong.
+>
+> **Agreement between the two tokenizers is necessary and not sufficient.** `{#await}` must be
+> refused **structurally**, at the point the adapter inspects the subtree. It cannot be validated
+> by comparison.
+
+The reference deployment's framing generalises the invariant: the token array is a function of
+runtime data, and identity assumes it is not — **`{#await}` is the case where it is a function of
+*time*, and time always starts in the same place, so both implementations agree on the wrong
+answer.**
+
+### The same measurement surfaced a live client-side SDK defect
+
+**[VERIFIED]** against published `langsys-js-typescript@0.6.5`, `dist/index.mjs:1408` and `:1427`:
+
+```js
+if (this.tokens.length === 1) {
+    this.element.innerText = this.applyParams(LangsysApp.Translations.t(this.tokens[0], category));
+}
+```
+
+An `innerText` assignment **replaces every child**, including the `<!--[-->` / `<!--]-->` anchors
+Svelte uses to locate the block. Measured consequence: both promises resolve, and **the DOM still
+reads `loading`, permanently** — Svelte's update targets nodes no longer in the document. The
+identical run without the write-back reached the resolved content, so the freeze is caused by the
+write, not by hydration.
+
+**This does not require SSR.** Any Svelte app whose `<Translate>` wraps a single-token subtree the
+framework later updates has a block frozen at its first value. `{#await}` is merely the case where
+it is guaranteed at mount. Reported upstream.
+
+**[OPEN]** A **multi-token** pending branch takes the content-block path (DOM mutator) rather than
+`innerText`, and was not measured. Irrelevant if the guard refuses `{#await}` outright; it is the
+first thing to measure if anyone proposes allowing a narrow case.
+
 ### Structure is not hashed — a property worth stating, not discovering
 
 Falls out of the baseline: **e1 and e2 produce the same `custom_id`** despite completely different

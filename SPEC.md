@@ -98,6 +98,13 @@ walks the HTML server-side, substitutes, sends. This package is its Node sibling
 conform to it rather than invent a parallel model. Where the two disagree, PHP is presumed
 correct until shown otherwise — it has years of production behind it.
 
+**A caveat added by the PHP owner.** That tiebreak is a sound default and it is not a proof.
+This review breaks it twice, in opposite directions: on `&nbsp;` (§5) PHP's behaviour
+fragments *its own* catalog on characters no human can see, and on multi-worker caching (§8)
+PHP has no answer to examine because its deployment model never posed the question. "Years of
+production behind it" is evidence that a behaviour has not produced a **visible** failure.
+The failure class in §10 is exactly the class that stays invisible for years.
+
 ---
 
 ## 2. Scope
@@ -313,6 +320,51 @@ flag it to the owner rather than tidying it. The SDK's own comment on a past div
 > "Divergence-by-tidying is the same failure class as divergence-by-oversight, just better
 > intentioned."
 
+### PHP's actual marker behaviour — measured, and the table above overstates it
+
+**[VERIFIED]** by executing `langsys-php`'s `HtmlParser` at `a76ed1a`, not by reading it.
+Three corrections, in increasing order of consequence.
+
+**1. `data-ls-phrase` is not recognised by `langsys-php` anywhere.** The string does not occur
+in `src/` or `tests/`. Recognition is **one-way**: the JS tokenizer knows both spellings, PHP
+knows only `data-langsys-phrase`.
+
+**2. PHP's `isPhraseMarked()` is not called by PHP's tokenizer.** It has exactly one caller,
+`src/Html/PageTranslator.php:336`. `HtmlParser::extractPhrases()` — the content-block path,
+and the one that feeds `generateCustomId` — deliberately ignores it. The reason is a comment
+at `src/Html/HtmlParser.php:322-331`: content blocks are applied by a path with no tokenized
+branch, so honouring the marker there "registered a tokenized catalog entry that could never
+be rendered". The predicates are mirrored byte-for-byte; the **call sites are not**, and only
+the call sites affect identity.
+
+Measured — all three yield the identical 3-token split:
+
+| input | tokens |
+|---|---|
+| `<span data-langsys-phrase>Based on <b>5</b> reviews</span>` | `["Based on","5","reviews"]` |
+| `<span data-ls-phrase>…</span>` | `["Based on","5","reviews"]` |
+| `<span>…</span>` — **control** | `["Based on","5","reviews"]` |
+
+The control is not decoration. Without it, "the marker had no effect" and "the probe never
+ran" are the same output — §10 rule 4.
+
+**3. This is live in the reference deployment's own topology.** §1 records it as
+`adapter-node` **behind a PHP proxy**. A page this package renders with `data-ls-phrase`,
+passing through a PHP layer that calls `translatePage()`, has its kept-whole sentences
+re-split — the precise failure §3.2 exists to prevent, arriving from the one direction nobody
+is watching.
+
+**Recommendation.** This package emits **`data-langsys-phrase`** — the spelling both other
+implementations understand — and may emit `data-ls-phrase` alongside it. Emitting only the JS
+spelling is the single combination that is silently wrong in a topology that ships today.
+Teaching PHP `data-ls-phrase` is a small additive change and worth doing, but it does not
+remove the need for this package to emit the spelling that works now.
+
+What the table gets right, also measured: `translate="no"` and a **bare** `data-notrans` both
+drop the subtree **and its attributes** — `<div><img translate="no" alt="X"><span>keep</span></div>`
+yields `["keep"]` against a control of `["X","keep"]` — and `data-notrans="false"` opts back
+in, yielding `["X","keep"]`. PHP matches the JS behaviour described in §5.
+
 ---
 
 ## 5. Tokenizer parity — the primary risk
@@ -369,12 +421,50 @@ disagree while each looks right in isolation:
   exclusion check returns before `_tokenizeAttributes` (`:322-329`), so `translate="no"` on an
   `<img alt="...">` drops the `alt` as well as the subtree. Easy to implement as
   "skip children" and be wrong only on attribute-bearing nodes.
-- **`&nbsp;` (U+00A0) collapses and trims in JS.** Text tokens are normalised with
-  `.replace(/\s+/g, ' ').trim()` (`:338`), and JS `\s` **does** match U+00A0 — verified by
-  execution: `"Hello\u00A0world\u00A0"` → `"Hello world"`. **[OPEN]** PHP's `trim()` does not
-  strip U+00A0 by default and `\s` in PCRE only does with `/u`. If PHP retains it, every token
-  containing a non-breaking space diverges. **This is a concrete first fixture — please
-  confirm rather than assume, in either direction.**
+- **`&nbsp;` (U+00A0) — ANSWERED, and the two implementations diverge. [VERIFIED]** JS
+  normalises text tokens with `.replace(/\s+/g, ' ').trim()` (`:338`) and JS `\s` matches
+  U+00A0. PHP's `normalizeWhitespace()` is `trim(preg_replace('/\s+/', ' ', $text))`
+  (`src/Html/HtmlParser.php:427-431`) — **no `/u` modifier**, so PCRE `\s` is ASCII-only, and
+  PHP's `trim()` default charlist does not contain U+00A0 either. **PHP retains it.** Executed
+  against `a76ed1a`:
+
+  | input | PHP tokens | JS tokens | |
+  |---|---|---|---|
+  | `<p>Hello&nbsp;world </p>` | `["Hello\u00A0world"]` | `["Hello world"]` | content differs |
+  | `<p>a&nbsp;&nbsp;b</p>` | `["a\u00A0\u00A0b"]` | `["a b"]` | JS collapses the run, PHP keeps both |
+  | `<p>&nbsp;</p>` | `["\u00A0"]` | `[]` | **token count differs** |
+  | `<p> </p>` — control | `[]` | `[]` | ASCII whitespace agrees |
+
+  The trailing ASCII space in row 1 *is* trimmed by PHP, so the rule is not "PHP does not
+  trim" — it is **PHP normalises ASCII whitespace only**.
+
+  Row 3 is the sharp one: `&nbsp;` as a spacer between inline elements is ordinary authored
+  markup, and it changes the **length** of the array, not a character inside one. Row 1 is the
+  insidious one — real output from the probe:
+
+  ```
+  PHP tokens  = ["Hello world"] -> f753ffd212d0acaab04940c664790ef2
+  JS  tokens  = ["Hello world"] -> fa08a023b349e0f2992d7e66a5baee9d
+  ```
+
+  Those two arrays are byte-different and **render identically in every log line, every diff,
+  and every translator UI**. A fragmentation whose only evidence is invisible at every point a
+  human would look is worth more than one fixture.
+
+  **[OPEN] — and it is Darryl's call, not an SDK owner's.** Neither behaviour is obviously
+  right, so §1's "PHP is presumed correct" does not settle it:
+
+  - JS's collapse is right for **identity**: `Hello world` and `Hello&nbsp;world` are visually
+    identical and should not be two catalog entries a translator cannot tell apart.
+  - PHP's retention is right for **typography**: U+00A0 is authored intent (`5&nbsp;km`,
+    French punctuation spacing), and collapsing it reintroduces a line-break opportunity the
+    author deliberately removed.
+
+  The third option is the only one right on both counts: normalise for the **key**, preserve
+  for the **render**. That is a change to both implementations. Whichever is chosen, changing
+  PHP's normaliser orphans every existing catalog entry containing a U+00A0 — the
+  `generateLegacyCustomId` situation exactly, which is why it wants deciding before this
+  package emits its first token rather than after.
 - **There are already TWO tokenizers in the base SDK, and only one is registerable.**
   `tokenizeElement` (`:265-270`) and `legacyTokenizeElement` (`:288-292`) call the same walker
   with different flags — `duplicateSelectOptions` and `applyStyles`. The legacy one exists
@@ -391,6 +481,39 @@ disagree while each looks right in isolation:
   accepted consequence rather than a surprise.
 - Comment nodes, CDATA, and text nodes that normalise to the empty string (dropped at `:339`,
   not emitted as `""`).
+
+Added by the PHP owner, all measured against `a76ed1a` by execution:
+
+- **Attributes precede children in PHP too. [VERIFIED]** `<p title="ATTR">CHILD</p>` →
+  `["ATTR","CHILD"]`; `<div title="OUTER"><p title="IN">T</p></div>` → `["OUTER","IN","T"]`.
+  Agrees with the JS walker. Recorded as a positive result so the agreement is on the record
+  rather than assumed.
+
+- **PHP emits attributes in CONFIGURED-LIST order, not document order. [VERIFIED]**
+  `extractAttributePhrases()` iterates `$this->translatableAttributes` and tests
+  `hasAttribute()` (`src/Html/HtmlParser.php:361-370`), so `<img title="T" alt="A">` and
+  `<img alt="A" title="T">` both yield `["A","T"]` and the identical `custom_id`
+  `695fbdda9fa2898aebd1dc7e3f26f605`. **[OPEN]** — does the JS walker iterate the constant, or
+  `element.attributes`? If it iterates the element, those two spellings produce **different**
+  ids in JS and the **same** id in PHP, and the trigger is an author reordering two
+  attributes: the least suspicious edit that exists. Fixture both orderings and assert they
+  collapse to one id.
+
+- **`value` sorts AFTER the 15 attributes in PHP. [VERIFIED]**
+  `<button value="VAL" title="TIT">TXT</button>` → `["TIT","VAL","TXT"]`, because
+  `extractAttributePhrases()` runs before `extractButtonValue()` (`:337`, `:340`).
+  **[OPEN]** the JS array for that exact input. §9 establishes that the two *lists* match; it
+  says nothing about where `value` sits in the emitted **order**, and order is identity.
+
+- **PHP's attribute list is RUNTIME-MUTABLE, so `custom_id` is a function of configuration.
+  [VERIFIED]** `addTranslatableAttributes()` and `setTranslatableAttributes()` are public API.
+  Measured on `<div data-tooltip="Hi">x</div>`: the default parser gives `["Hi","x"]` →
+  `4cd4584d7b0fafa87c91602ddc0686de`, and a parser configured with the JS 15 gives `["x"]` →
+  `5fbbfbb278583ae24e591c231163866a`. Two PHP apps configured differently disagree with **each
+  other**, not merely with JS. **A conformance suite must pin the attribute list as part of
+  the fixture**, or it certifies whatever the runner happened to be configured with — a
+  fixture that passes for a reason unrelated to the implementation, which is §10 again. This
+  package should treat the list as a compile-time constant.
 
 Fixtures must be authored so that a wrong implementation *fails*, not merely so a right one
 passes. An implementation is not conformant because it produced no diff — see §10.
@@ -515,10 +638,58 @@ Two PM2 instances mean two independent in-process caches, so during propagation 
 alternates between old and new copy depending on which worker answers. To a non-engineer that
 reads as "my change didn't save."
 
-**[OPEN]** What this package should do about it. Options include a shared cache backend
-(Redis, as `langsys-php` already supports via `LANGSYS_CACHE_DRIVER`), a cache-busting
-signal from the Translation Manager, or documenting it loudly with a recommended TTL. PHP has
-faced this exact problem already and its answer should be examined first.
+**Answered by the PHP owner — and the premise is wrong. [VERIFIED]** `langsys-php` has not
+solved multi-worker cache inconsistency. **It has never had the problem**, and the reason does
+not transfer.
+
+PHP's memo is `Client::$translationsMemoryCache`, an ordinary **instance property**
+(`src/Client.php:96`) — not a static. Under PHP-FPM the object dies with the
+request, so the **only** cross-request tier is the shared one (file or Redis), and two workers
+cannot hold different views of it. `LANGSYS_CACHE_DRIVER=redis` exists to share a cache
+between *machines* and to survive a read-only filesystem. It was never a fix for a divergence,
+because there was none to fix.
+
+`Client` holds exactly one static, and it is worth looking at because it is this whole section
+in miniature: `protected static $requirementsWarned = false` (`src/Client.php:175`), a
+once-per-process latch so a runtime-requirement warning is not repeated. Under FPM
+"once per process" is approximately "once per request" and the latch is nearly inert. Under a
+persistent worker the same line means **the warning fires once at boot and never again** — the
+semantics of the code change without the code changing. That is the shape to look for when
+porting: not variables that are obviously shared, but variables whose *lifetime* was defined by
+a runtime that ended every request for you.
+
+So the lesson is not "add Redis". It is the structural rule PHP gets for free and Node does
+not:
+
+> Any in-process memo is **request-scoped**. The shared tier is the **only** cross-request
+> tier. A five-minute process-lived memo sitting in front of a shared cache reintroduces
+> exactly the inconsistency the shared cache was added to remove.
+
+That is §3.1's rule arriving from a second direction — worth noticing, because a five-minute
+catalog memo does not *look* like module-global state, and it is.
+
+Two properties of PHP's shared tier worth copying, and one worth not:
+
+- **Copy: expiry is stamped absolutely at write time**, into the shared artifact —
+  `FileCache::set()` writes `time() + $ttl` (`src/Cache/FileCache.php:89-93`). Every reader of
+  that key sees the same expiry instant, so workers expire **together** instead of drifting by
+  however long each has been up. A per-process "cached at" clock is what makes propagation
+  staggered; an absolute stamp inside the shared record is what makes it atomic.
+- **Copy: invalidation targets the shared key.** `clearCache()` deletes it
+  (`src/Client.php:670-671`), so one worker's invalidation is every worker's.
+- **Do not copy: there is no single-flight.** `get()` takes no lock, so N workers missing the
+  same key simultaneously all call the API. Harmless at PHP-FPM's concurrency; not harmless at
+  Node's. One long-lived process should coalesce in-flight fetches per key.
+
+**The caveat that inverts the framing:** PHP's immunity is a property of the **deployment
+model**, not of the code. Run this identical SDK under FrankenPHP worker mode, Swoole or
+RoadRunner — long-lived PHP workers that reuse the `Client` — and it has the PM2 bug exactly.
+§1's "PHP is presumed correct" therefore holds here for the wrong reason: PHP is not correct
+about multi-worker caching, it has simply never been asked. Do not read its architecture as a
+validated answer to a question it has not faced.
+
+**[OPEN]** remains for the *policy*: a cache-busting signal from the Translation Manager would
+beat any TTL, but it is Translation Manager surface, not this package's.
 
 ---
 
@@ -547,8 +718,36 @@ Plus `value` on `<button>` and on `<input type="submit|button">`.
 `value` note matches `VALUE_TRANSLATABLE_ELEMENTS = ['button']` and
 `VALUE_TRANSLATABLE_INPUT_TYPES = ['submit', 'button']` (`:129-130`). **[VERIFIED]**
 
-**[OPEN]** remains for PHP's side — that comparison needs the PHP agent, and per §10 rule 2 it
-should not be settled by the JS owner reading a PHP file.
+**Answered by the PHP owner: the 15 match exactly, in order — and PHP carries 12 more.
+[VERIFIED]** by executing `getTranslatableAttributes()` at `a76ed1a`, not by reading the
+constant. Indices 0–14 of PHP's list are the 15 above, in the identical order. Then:
+
+```
+data-confirm, data-tooltip, data-title, data-content, data-original-title,
+data-bs-title, data-bs-content, data-loading-text, data-success-message,
+data-warning-message, data-empty-message, data-placeholder
+```
+
+27 total. They are framework conventions — Bootstrap, Rails/Laravel `data-confirm` — that a
+server-rendered PHP page routinely contains.
+
+**This is a live divergence, not a footnote.** The dangerous direction is §7's hand-off, where
+one DOM is walked by both: a block containing `data-tooltip` tokenizes to `["Hi","x"]` in PHP
+and `["x"]` in JS — ids `4cd4584d…` and `5fbbfbb2…`, measured in §5. Same page, same element,
+two catalog entries.
+
+Flagged rather than merged, per the instruction. The owner's choice is not symmetric:
+
+- **JS adopts the 12** — identity converges, and every JS content block whose subtree contains
+  one of those attributes changes id. A catalog migration.
+- **PHP drops the 12** — the same migration on the PHP side, and PHP users lose coverage they
+  have today.
+- **Neither** — the divergence is documented and the hand-off keeps fragmenting.
+
+What *this package* should do meanwhile is not open: **implement the 15.** It is the
+JS-family sibling and §7's hand-off is to a JS client. Implementing 27 would make it agree
+with PHP and disagree with the client it hands off to on every single request — the worse
+trade, since the hand-off is a per-request event and PHP interop is a deployment-topology one.
 
 ---
 
@@ -622,11 +821,13 @@ Do not begin building the affected section until these are resolved.
 | 3 | Can the tokenizer produce byte-identical tokens from an HTML string as from a DOM? Prove on fixtures before committing. | §5 | this package + PHP |
 | 4 | ~~Should registration be attempted under a read-only key?~~ **ANSWERED §6.** Refuse locally, return success, log unconditionally (the SDK's own precedent gates the log on `debug` — do not copy that). | §6 | base SDK ✅ |
 | 5 | Can client SDKs seed synchronously before hydration? **PARTIALLY ANSWERED §7** — the blocker is that `init()` seeds *after* `await validate()`, not the mount hook. A `seedCatalog()` export is proposed. Per-framework hydration timing is still open. | §7 | client SDKs |
-| 6 | What should this package do about multi-worker cache inconsistency? What does PHP already do? | §8 | PHP |
-| 7 | Do the JS and PHP translatable-attribute lists match exactly? **JS side confirmed §9**; PHP side still open. | §9 | PHP |
+| 6 | ~~What should this package do about multi-worker cache inconsistency? What does PHP already do?~~ **ANSWERED §8 — the premise was wrong.** PHP has never had the problem: its memo is an instance property and FPM ends the request. The rule is "request-scoped memo, shared tier is the only cross-request tier", not "add Redis". Policy sub-question (a bust signal from the Translation Manager) stays open. | §8 | PHP ✅ |
+| 7 | Do the JS and PHP translatable-attribute lists match exactly? **ANSWERED §9 — no.** The 15 match exactly and in order; PHP carries **12 more**. This package implements the 15. The PHP↔JS divergence needs an owner's decision (converge either way = catalog migration). | §9 | PHP ✅ / Darryl |
 | 8 | `-server` or `-node`? | §11 | Darryl |
 | 9 | **NEW.** How does this package consume the base SDK's pure functions without importing its singleton graph — vendor-with-conformance-test, or request `sideEffects: false` + a `/pure` subpath export? | §3.1 | base SDK + this package |
-| 10 | **NEW.** Does PHP's tokenizer retain `&nbsp;` (U+00A0) where JS collapses and trims it? First conformance fixture either way. | §5 | PHP |
+| 10 | ~~Does PHP's tokenizer retain `&nbsp;` (U+00A0)?~~ **ANSWERED §5 — yes, they diverge.** PHP normalises ASCII whitespace only; a bare `&nbsp;` text node is a token in PHP and absent in JS, so the token *count* differs. Which behaviour wins is a product decision, not an SDK one. | §5 | PHP ✅ / Darryl |
+| 11 | **NEW.** Does the JS walker iterate the `TRANSLATABLE_ATTRIBUTES` constant or `element.attributes`? PHP iterates the constant, so attribute order in the source does not affect the id. If JS iterates the element, reordering two attributes changes the id in JS only. Also: where does `value` sit in the JS emitted order? PHP puts it after all 15. | §5 | base SDK |
+| 12 | **NEW.** `data-ls-phrase` is unrecognised by `langsys-php`, and PHP's `isPhraseMarked()` is never called by PHP's tokenizer (only by `translatePage()`). Which spelling does this package emit, and does PHP learn the JS one? Live today: the reference deployment is adapter-node behind a PHP proxy. | §4 | PHP + Darryl |
 
 ---
 
@@ -681,4 +882,5 @@ result and should not be disguised as a review.
 | Date | Reviewer | What changed |
 |---|---|---|
 | 2026-08-21 | `langsys-skill` agent | Initial draft from the SSR design discussion |
+| 2026-08-21 | `langsys-php` agent (reference impl.) | Answered #6, #7 and #10 by **executing** the PHP tokenizer, not reading it. #10: PHP retains U+00A0 — the arrays print identically and hash differently. #6: the premise was wrong, PHP never had the multi-worker problem. #7: 15 match in order, PHP has 12 more. Corrected §4 — `data-ls-phrase` is unrecognised in PHP and `isPhraseMarked()` is never called by PHP's tokenizer. Added four PHP-side parity constraints to §5 incl. the runtime-mutable attribute list. Qualified §1's "PHP is presumed correct" tiebreak, which this pass breaks twice. Raised #11 and #12. |
 | 2026-08-21 | `langsys-js-typescript` agent (base SDK) | Answered open questions #1 and #4; partially answered #5. Corrected two wrong `[VERIFIED]` citations in §3.4 and one in §1. Added seven tokenizer-parity fixture requirements to §5, incl. token *ordering* as part of `custom_id` identity. Confirmed §9's attribute list against source. Raised two new open questions (#9, #10). |

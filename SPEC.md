@@ -713,6 +713,46 @@ right advice with the wrong mechanism named, corrected in `3.6.6`. Two agents ma
 same error independently within a day. Anyone implementing against this specification should expect
 to make it too.
 
+### CLOSED — the contract now names its own boundary
+
+`langsys-js-typescript@eb3dc66`, verified: a **SCOPE** section on the `_walkForTokens` contract
+(`src/content-block.ts:348`) naming both mechanisms side by side and stating that coalescing is the
+bug in one and the requirement in the other; a counter-warning at the `encodeRichText` site
+(`src/richtext.ts:81`) explaining *why* the coalescing is correct — a sentence must survive whole or
+plural agreement is impossible in languages with more than two forms — and noting that arriving
+there from the other comment intending to make the two consistent **is** the mistake; plus three
+tests pinning the Phrase direction, closing the one-directional guard.
+
+Both ends are named, and the warning sits **where the well-intentioned edit would actually land**
+rather than only where the rule is stated.
+
+**The base SDK's diagnosis of what their comment previously said is the cleanest instance of this
+failure class in the whole project.** It said:
+
+> *"do not scope this contract to a framework"* — and — *"the invariant is about the token array,
+> not about any renderer."*
+
+**Both true. Both push a reader toward "never coalesce adjacent text nodes, anywhere."** The
+misapplication, delivered as the lesson, by two statements that are individually correct.
+
+That is a distinct variant worth naming: not a wrong claim, and not a silent absence, but **two
+correct statements composing into a wrong generalisation.** Nothing in either sentence is
+falsifiable; the defect lives in what they jointly imply. A proofreader finds nothing, because
+there is no wrong sentence to find.
+
+### Mutation standard for the inverse fixtures
+
+> **The mutation should be the mistake you are actually afraid of.**
+
+The base SDK mutation-checked the new Phrase tests by **modelling the actual misapplication** —
+changing `richtext.ts` to `.trim()` each text node independently, which is literally what applying
+the walker's rule there would look like — rather than any edit that produces red.
+
+For a corpus whose entire purpose is **to be generalised from**, that is the right standard for the
+inverse fixtures specifically: an arbitrary break proves only that a test *can* fail, not that it
+catches the thing it exists for. Pair every inverse fixture with a named mutation describing the
+plausible wrong edit it is meant to intercept.
+
 ### Fixture design rule: every absence needs a paired presence
 
 Case 5's control is the point, and it must not be dropped when this becomes a file.

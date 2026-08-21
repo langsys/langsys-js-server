@@ -385,6 +385,22 @@ fallback. Its doc comment carries the general lesson **[VERIFIED]**:
 > shifts every character's offset, so the same phrase pair can collide standalone and not
 > collide here — and changing `category` moves every character into different lanes.
 
+### Sequencing: the first fixture is blocked, and that is not a delay
+
+Raised by the PHP owner and it changes the plan. `tests/fixtures/tokenizer-reference.json` in
+`langsys-php` is asserted against directly by `langsys-js-typescript`, so adding the `&nbsp;`
+case today lands a red suite in their repo the moment they pull.
+
+More importantly: **a fixture here does not record a fact, it encodes a decision.** JS and PHP
+both behave as their authors intended; there is no bug to pin. So the decision on open
+question #10 must *precede* the first fixture rather than be discovered by writing one.
+
+That inverts the usual order and is worth stating plainly, because "add a conformance suite"
+sounds like work that can start immediately. The suite can start — on the cases where the
+three implementations already agree, which is most of them. The divergent cases are blocked on
+#10, #11 and #12, and writing them early would either freeze an accidental winner or break a
+green build in someone else's repository.
+
 ### Required: a shared conformance fixture set
 
 **[PROPOSED]**, and the single most important recommendation in this document.
@@ -688,6 +704,26 @@ RoadRunner — long-lived PHP workers that reuse the `Client` — and it has the
 about multi-worker caching, it has simply never been asked. Do not read its architecture as a
 validated answer to a question it has not faced.
 
+**Independently confirmed against the published Packagist artifact** (`langsys/langsys-php@v1.3.1`,
+a different source from the working tree the finding came from). The asymmetry is sharper than
+"one string is missing":
+
+| Predicate | Defined | Call sites |
+|---|---|---|
+| `isTranslationExcluded` | `src/Html/HtmlParser.php:214` | **five** — including `MarkupTokenizer.php:79` and `Client.php:1075` |
+| `isPhraseMarked` | `src/Html/HtmlParser.php:289` | **one** — `PageTranslator.php:336` |
+
+The exclusion predicate is wired into the tokenizer path. The phrase-marker predicate is not.
+`data-ls-phrase` appears nowhere in `src/`.
+
+> **The lesson for anyone extending this protocol: mirrored predicates are not a symmetric
+> contract.** Both SDKs implement `isPhraseMarked()` byte-for-byte identically, and that
+> equivalence is documented, checked and real. It says nothing about whether either SDK *calls*
+> it in the path that computes identity — and only call sites affect identity. §4 of this
+> document originally asserted an interoperable marker contract on exactly that reasoning: two
+> matching predicates, therefore a working handshake. The predicates matched. The handshake did
+> not exist.
+
 **[OPEN]** remains for the *policy*: a cache-busting signal from the Translation Manager would
 beat any TTL, but it is Translation Manager surface, not this package's.
 
@@ -787,6 +823,28 @@ Rules that follow, and that this package should adopt:
 7. **Tests should be majority-negative.** A rule that only proves it fires is half-tested; the
    failure that hurts is flagging correct code, because someone acting on it rewrites working
    code into the bug the rule exists to prevent.
+8. **A cited line number is not evidence until something reads it back.** Contributed by the
+   base SDK owner, who re-ran their own citations before committing and found six off by a few
+   lines, then found four in `langsys-skill` that had already shipped. The PHP owner then found
+   two of their own the same way — including a pair pointing at the *comment lines above* the
+   calls, off by one, in the direction that reads plausibly.
+
+   Auditing all fifteen citations in `langsys-skill`'s `VERIFIED.md` split cleanly: **11 of 11
+   derived by grepping the artifact directly were correct; 4 of 4 inherited from a peer's
+   message were wrong.** But the PHP owner's framing is the better one, because theirs were not
+   inherited — they generated both, minutes apart, from files they had open:
+
+   > A line number is a claim you make in passing while your attention is on the argument, so
+   > it never gets the scrutiny the argument gets.
+
+   That covers both failures. Read every citation back, including your own, and especially the
+   ones you wrote while thinking about something else.
+9. **A grep hit is not a reading.** While verifying §4, this document's author found
+   `data-ls-phrase` in the published PHP package and briefly concluded its README claimed
+   support the code did not implement. Reading the surrounding sentence showed the opposite —
+   it was correctly describing what the *JS* SDK must recognise. The string matched; the claim
+   was the reverse of what the match suggested. One sentence of context was the whole
+   difference between a real finding and a fabricated defect report.
 
 Rule 6 applies to this document with particular force. It was assembled from a design
 conversation, and its **[VERIFIED]** tags are only as good as the artifact citations beside
@@ -882,5 +940,6 @@ result and should not be disguised as a review.
 | Date | Reviewer | What changed |
 |---|---|---|
 | 2026-08-21 | `langsys-skill` agent | Initial draft from the SSR design discussion |
-| 2026-08-21 | `langsys-php` agent (reference impl.) | Answered #6, #7 and #10 by **executing** the PHP tokenizer, not reading it. #10: PHP retains U+00A0 — the arrays print identically and hash differently. #6: the premise was wrong, PHP never had the multi-worker problem. #7: 15 match in order, PHP has 12 more. Corrected §4 — `data-ls-phrase` is unrecognised in PHP and `isPhraseMarked()` is never called by PHP's tokenizer. Added four PHP-side parity constraints to §5 incl. the runtime-mutable attribute list. Qualified §1's "PHP is presumed correct" tiebreak, which this pass breaks twice. Raised #11 and #12. |
 | 2026-08-21 | `langsys-js-typescript` agent (base SDK) | Answered open questions #1 and #4; partially answered #5. Corrected two wrong `[VERIFIED]` citations in §3.4 and one in §1. Added seven tokenizer-parity fixture requirements to §5, incl. token *ordering* as part of `custom_id` identity. Confirmed §9's attribute list against source. Raised two new open questions (#9, #10). |
+| 2026-08-21 | `langsys-php` agent (reference impl.) | Answered #6, #7 and #10 by **executing** the PHP tokenizer, not reading it. #10: PHP retains U+00A0 — the arrays print identically and hash differently. #6: the premise was wrong, PHP never had the multi-worker problem. #7: 15 match in order, PHP has 12 more. Corrected §4 — `data-ls-phrase` is unrecognised in PHP and `isPhraseMarked()` is never called by PHP's tokenizer. Added four PHP-side parity constraints to §5 incl. the runtime-mutable attribute list. Qualified §1's "PHP is presumed correct" tiebreak, which this pass breaks twice. Raised #11 and #12. |
+| 2026-08-21 | `langsys-skill` agent (final review) | Independently confirmed §4's marker asymmetry against the **published Packagist artifact** rather than the working tree it came from — `isTranslationExcluded` has five call sites including the tokenizer, `isPhraseMarked` has one and is not in the identity path. Named the structural lesson: mirrored predicates are not a symmetric contract, which is the reasoning §4 originally rested on. Added §5 sequencing — the first divergent fixture is blocked on decisions #10/#11/#12, because a fixture here encodes a decision rather than records a fact. Added rules 8 and 9 to §10. Restored review-log chronology. |

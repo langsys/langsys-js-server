@@ -135,3 +135,31 @@ jobs:
             echo "::error::src/vendor/pure.ts differs from a fresh extraction of langsys-js-typescript@0.6.5. Re-run _dev_/vendor-pure.sh and commit the result."
             exit 1
           fi
+
+  tarball:
+    name: The published artifact runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Packs the tarball, installs it into an EMPTY project resolving only its declared
+      # dependencies, and runs an acceptance smoke through both entry points.
+      #
+      # Every other job here drives the working tree, where every devDependency is present
+      # and every source file exists regardless of the `files` allowlist. The tarball is a
+      # different artifact, and the ways it differs are invisible from the working tree:
+      # a path missing from `files`, an `exports` condition pointing at a file that is not
+      # shipped, or an external import the manifest does not declare — which is a
+      # crash-on-first-require for the consumer and a clean CI run for us.
+      #
+      # A sibling repo in this family shipped exactly that (a source directory missing
+      # from `files`) past a suite that was green against its working tree.
+      - name: Acceptance smoke against the packed tarball
+        run: npm run test:tarball

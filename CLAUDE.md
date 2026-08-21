@@ -57,6 +57,9 @@ _dev_/
     runtime-conformance.{sh,mjs}# Node/Deno/Bun/Workers, with cross-runtime digest diff
     runtime-conformance-workers.mjs
     client-dom-parity.js        # Browser probe: served bytes vs hydrated DOM
+    tarball-acceptance.sh       # Pack, install into an empty project, run the smoke
+    tarball-smoke.mjs           # The acceptance smoke, run against the INSTALLED package
+    check-externals.mjs         # Shipped bundle's imports vs the shipped manifest
     publish.sh                  # Release script (see _dev_/PUBLISHING.md)
 
 example/            # Runnable SvelteKit app + mock API. Not published.
@@ -71,6 +74,7 @@ npm run typecheck
 npm run build         # tsup -> dist/
 npm run test:runtimes # Node/Deno/Bun/Workers against the BUILT dist
 npm run test:e2e      # builds the example, runs SPEC §13 acceptance tests
+npm run test:tarball  # packs, installs into an empty project, runs the smoke
 npm run test:all      # everything
 ```
 
@@ -122,7 +126,13 @@ rules, in the form they matter here:
    own, and especially the ones written while thinking about something else.
 9. **A grep hit is not a reading.** One sentence of context is the difference between a real
    finding and a fabricated defect report.
-10. **A green typecheck over vendored code is not evidence of anything.** `@ts-nocheck` is
+10. **The artifact under test must be the artifact that ships.** The e2e suite drove a
+    bundle that had inlined `dist/` at *its* last build, so neutering `t()` left all
+    twelve tests green. `npm run test:tarball` packs and installs into an empty project
+    for the same reason — the working tree has every devDependency present and every
+    source file readable regardless of the `files` allowlist, so it cannot see what a
+    consumer sees.
+11. **A green typecheck over vendored code is not evidence of anything.** `@ts-nocheck` is
     required over verbatim vendored JS, and `tsc` reports clean over a region it was told
     not to look at. Found here as a renamed function whose callers were not renamed — a
     guaranteed `ReferenceError` that typechecked fine.
@@ -131,7 +141,17 @@ rules, in the form they matter here:
 been shown to work. Existing precedents: swapping `AsyncLocalStorage` for a module global
 (4 isolation tests go red), emitting attributes after children (40 red), removing the
 `langsys.run()` wrapper from the example (5 e2e red), injecting a runtime-varying digest
-(caught on 3 runtimes while all 4 still pass their own checks).
+(caught on 3 runtimes while all 4 still pass their own checks); and five mutations against
+`test:tarball` (a `files` entry removed, an `exports` condition pointed at a missing file,
+an undeclared external import, a neutered `t()`, and a bundle with no imports at all).
+
+That last suite is also where a mutation **survived** and the check was wrong rather than
+the code: demoting `parse5` to a devDependency kept everything green, because `tsup` has no
+explicit `external` and derives it from `dependencies` — so the demotion made tsup *bundle*
+parse5 and the package still worked. The manifest and the artifact are re-derived together
+on every build, which meant the original "no devDependency leaked" assertion **could not
+fail by construction**. It was replaced with one that compares the shipped bundle's imports
+against the shipped manifest, and that one goes red.
 
 ## The failure mode everything guards against
 

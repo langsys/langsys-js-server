@@ -265,6 +265,20 @@ npm install
 log_info "Running build to verify everything compiles..."
 npm run build
 
+# A clean build is not evidence that the PUBLISHED artifact works. Pack the tarball,
+# install it into an empty project resolving only its declared dependencies, and run an
+# acceptance smoke through both entry points — the version bump has already touched
+# package.json at this point, which is precisely the file whose `files`, `exports` and
+# `dependencies` blocks decide whether a consumer's first `import` throws.
+#
+# `langsys-skill` shipped a version that crashed on first run because a source directory
+# was missing from `files`, past a suite that was green against its working tree.
+log_info "Verifying the packed tarball actually runs..."
+if ! "$(dirname "${BASH_SOURCE[0]}")/tarball-acceptance.sh"; then
+    handle_error "The packed tarball failed its acceptance smoke. Publishing it would ship a package that does not run. Nothing has been pushed or tagged."
+fi
+log_success "Packed tarball installs and runs"
+
 # Amend the last commit with version bump
 log_info "Amending last commit with version bump..."
 # Stamp the release date into CHANGELOG.md at RELEASE time, not authoring time.

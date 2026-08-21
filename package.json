@@ -40,10 +40,11 @@
         "test:watch": "vitest",
         "prepublishOnly": "npm run build",
         "test:runtimes": "./_dev_/runtime-conformance.sh",
-        "test:all": "npm run build && npm run test && npm run test:runtimes && npm run test:e2e",
+        "test:all": "npm run build && npm run test && npm run test:runtimes && npm run test:e2e && npm run test:tarball",
         "example:install": "cd example && npm install",
         "example:build": "cd example && npm run build",
         "test:e2e": "npm run build && npm run example:build && vitest run --config vitest.e2e.config.ts",
+        "test:tarball": "./_dev_/tarball-acceptance.sh",
         "release": "./_dev_/publish.sh"
     },
     "keywords": [

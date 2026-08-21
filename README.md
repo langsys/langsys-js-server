@@ -78,8 +78,31 @@ a parse in the TTFB path for a check that only matters while you are building.
 npm install langsys-js-server
 ```
 
-Requires Node ≥18, or any runtime with `AsyncLocalStorage` (Deno, Bun, Workers with
-`nodejs_compat`).
+### Runtime support — executed, not claimed
+
+| Runtime | Status | Notes |
+|---|---|---|
+| Node ≥18 | ✅ verified | |
+| Deno | ✅ verified | 2.7+ |
+| Bun | ✅ verified | 1.3+ |
+| Cloudflare Workers | ✅ verified | requires the `nodejs_compat` flag |
+
+`npm run test:runtimes` executes an identical 26-check suite against the **built dist**
+under every runtime installed locally (Workers via `miniflare`/`workerd`), and then
+requires the identity digests to **match across runtimes**.
+
+That last part is the real assertion. Each runtime passing its own checks is the lesser
+half — the failure that would actually hurt is one runtime computing a *different*
+`custom_id` for the same input, fragmenting catalogs along a line nobody would think to
+look for. A runtime that is not installed reports `SKIPPED`, never a pass.
+
+> This suite earned its place immediately. `src/context.ts` imports `node:async_hooks`
+> correctly, but tsup 8 defaults `removeNodeProtocol` to true and shipped it as bare
+> `async_hooks`. Node and Bun tolerate that; **Deno rejects it outright** and Workers
+> require the prefix under `nodejs_compat`. Every source-level test passed. The package
+> claimed four runtimes in its README, its `engines` field and its *name*, and ran on
+> two. Nothing in the source was wrong, and no source-level test could have caught it —
+> only executing the built artifact under Deno did.
 
 ---
 
@@ -292,6 +315,11 @@ Concretely, in this repo:
   that has never been shown to fail has not been shown to work.
 - **Fixtures carry negative controls.** Without a control, "the marker had an effect" and
   "the probe never ran" produce identical output.
+- **The built artifact is asserted separately from the source.** A build step can silently
+  falsify a claim the source makes correctly — see the `node:` prefix note above.
+- **Cross-runtime identity is compared, not assumed.** Four runtimes, same digests. The
+  comparison itself is mutation-tested: injecting a runtime-varying value is caught even
+  though every runtime still passes its own checks.
 
 ### The failure mode all of this exists to prevent
 

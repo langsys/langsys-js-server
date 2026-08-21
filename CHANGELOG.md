@@ -28,6 +28,21 @@ server rendering.
   so partial coverage produces a signal instead of silently serving base language.
 - `_dev_/vendor-pure.sh` — extracts the pure functions verbatim from the published npm
   artifact and executes them against it, rather than transcribing them.
+- `_dev_/runtime-conformance.sh` — runs an identical 26-check suite against the built
+  dist under Node, Deno, Bun and Cloudflare Workers (via `miniflare`/`workerd`), then
+  requires the identity digests to match across all four. Uninstalled runtimes report
+  SKIPPED, never a pass.
+- `tests/build-output.test.ts` — assertions about the built artifact rather than the
+  source, because a build step can silently falsify a claim the source makes correctly.
+
+### Fixed (pre-release)
+
+- **The built dist did not run on Deno or Cloudflare Workers.** `src/context.ts` imports
+  `node:async_hooks` correctly, but tsup 8 defaults `removeNodeProtocol` to true and
+  emitted bare `async_hooks`. Node and Bun tolerate that; Deno rejects it and Workers
+  require the prefix under `nodejs_compat`. The package claimed four runtimes in its
+  README, `engines` field and name while running on two. Caught by executing the built
+  artifact under Deno; no source-level test could have found it.
 
 ### Not included
 

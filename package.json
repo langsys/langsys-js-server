@@ -1,7 +1,7 @@
 {
     "name": "langsys-js-server",
     "version": "0.1.0",
-    "description": "Request-scoped server-side translation for Langsys — renders translated, crawler-visible HTML during SSR on Node, Deno, Bun and Workers.",
+    "description": "Request-scoped server-side translation for Langsys \u2014 renders translated, crawler-visible HTML during SSR on Node, Deno, Bun and Workers.",
     "author": "Langsys",
     "license": "MIT",
     "homepage": "https://github.com/langsys/langsys-js-server",
@@ -38,7 +38,9 @@
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "test:watch": "vitest",
-        "prepublishOnly": "npm run build"
+        "prepublishOnly": "npm run build",
+        "test:runtimes": "./_dev_/runtime-conformance.sh",
+        "test:all": "npm run build && npm run test && npm run test:runtimes"
     },
     "keywords": [
         "i18n",
@@ -56,6 +58,7 @@
         "@types/node": "^22.10.0",
         "happy-dom": "^20.11.6",
         "langsys-js-typescript": "^0.6.5",
+        "miniflare": "^4.20260730.0",
         "tsup": "^8.4.0",
         "typescript": "^5.8.3",
         "vitest": "^4.1.7"

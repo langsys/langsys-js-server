@@ -45,12 +45,17 @@ which is why this is a separate package rather than a patch.
 **v0.1.0 does not translate everything.** Staged shipping is fine; silent partial
 coverage is not, so here is exactly what works.
 
-| Primitive | Server-rendered translation | Notes |
-|---|---|---|
-| `t(phrase, category?, params?)` | ✅ **Yes** | Full ICU plurals and interpolation |
-| `<title>`, meta, OG, `alt` — anything built from `t()` | ✅ **Yes** | This is the indexed copy that motivated the package |
-| `<Phrase>` | ❌ **Not in 0.1.0** | Renders base language server-side; translated on hydration |
-| `<Translate>` | ❌ **Not in 0.1.0** | Same |
+| Primitive | Server-rendered in 0.1.0 | What a crawler receives | How you would notice if it were wrong |
+|---|---|---|---|
+| `t(phrase, category?, params?)` | ✅ **Yes** | Translated | — |
+| `<title>`, meta, OG, `alt` — anything built from `t()` | ✅ **Yes** | Translated | — |
+| `<Phrase>` | ❌ **Not in 0.1.0** | **Base language** | `auditRenderedHtml()` lists it; view-source shows the base language |
+| `<Translate>` | ❌ **Not in 0.1.0** | **Base language** | **Nothing signals it by default.** The host carries no marker, so the audit cannot see it — view-source, or pass `contentBlockAttributes` if your app marks its own hosts |
+
+`t()` covers full ICU plurals and interpolation, and the `t()`-derived row is the indexed
+copy that motivated the package. The right-hand column is the one to read twice: a
+limitation you cannot detect is the failure mode this whole family keeps rediscovering,
+and `<Translate>` is the row that has no detector.
 
 `<Phrase>` and `<Translate>` need per-framework child-capture adapters, and the three
 frameworks require three genuinely different mechanisms (Svelte: re-entrant `render()`;

@@ -399,6 +399,66 @@ fallback. Its doc comment carries the general lesson **[VERIFIED]**:
 > shifts every character's offset, so the same phrase pair can collide standalone and not
 > collide here — and changing `category` moves every character into different lanes.
 
+### Pinning the attribute list is necessary and not sufficient
+
+Established by the PHP owner, **by mutation rather than by watching tests go green**, and
+implemented in `langsys-php@6e0c540`. This package should carry the same pair.
+
+A suite that runs fixtures against an explicitly configured 27 proves the three tokenizers agree
+*given a list*. It proves nothing about whether that list is the one real callers get — nobody
+constructs a parser with 27 arguments in production. Edit the default constant and such a suite
+stays green while every default-configured app silently re-keys.
+
+So it takes **two assertions, which must live in different places**:
+
+1. **Shared fixtures against an explicitly pinned list** → cross-SDK parity of the tokenizer
+   given a list. Shareable; this is the conformance suite.
+2. **A local, per-SDK assertion that that implementation's default equals the pinned list**,
+   array-identical *including order*. **Not** shareable — it is a claim about one
+   implementation's default, not about the contract.
+
+Write the literal out in (2). Slicing it from the constant compares the constant to itself and
+passes for any value of it.
+
+**And a pin is still not enough on its own.** The mutation results:
+
+```
+reorder alt/title                            -> pin test FAILS
+interleave data-tooltip into the ARIA block  -> pin test FAILS
+walker reads only first 3 entries,
+  list untouched                             -> harvest test fails,
+                                                PIN TEST STILL PASSES
+```
+
+That third row is the point: **a pin is a list comparison, and it passes just as happily when
+the walker has stopped consulting the list.** So the pair needs a third assertion — that every
+pinned attribute actually produces a token — with a negative control that an *unlisted*
+attribute does not, or it would also pass for a parser that harvests everything.
+
+**Proposed structure, not yet actioned:** put the 27 in the shared fixture file as data, and
+have each SDK assert its own default against it. Then exactly one copy of the list exists and
+three implementations check themselves against it. **[OPEN]** — this restructures
+`tokenizer-reference.json`, which the base SDK asserts against, so it is more than adding a case.
+
+### Adding is free; reordering re-keys everything
+
+Measured by the PHP owner:
+
+```
+default                     ["A","T","Body"]  c29b88d2aebbeebabd4edee2c883c910
++ 2 attributes not used      ["A","T","Body"]  c29b88d2aebbeebabd4edee2c883c910
+alt/title swapped            ["T","A","Body"]  85bec9a41062151fa0bf135a99e09667
+```
+
+Which is why §9's decision is survivable: the 12 append. Any future edit that *reorders* is a
+different class of change entirely.
+
+> **State the failure mode plainly, because it is the reason this is worth so much care: a
+> re-keyed block does not error. It renders in the base language and re-registers.** That is
+> indistinguishable from a phrase that was simply never translated — no exception, no warning,
+> no failed request. The catalog quietly grows a duplicate and the page quietly loses its
+> translation.
+
 ### Sequencing: the first fixture is blocked, and that is not a delay
 
 Raised by the PHP owner and it changes the plan. `tests/fixtures/tokenizer-reference.json` in

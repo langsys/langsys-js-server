@@ -1,9 +1,35 @@
-# langsys-js-server
+# Langsys SDK — Server
 
-Request-scoped server-side translation for Langsys. Renders **translated, crawler-visible
-HTML** during SSR on Node, Deno, Bun and Cloudflare Workers.
+<!-- Badge block matches langsys-js-typescript / langsys-php. The five npm- and
+     bundlejs-derived badges below resolve only once the package is on the npm registry;
+     until then shields.io returns a red "package not found", which reads as a broken
+     package rather than an unpublished one. UNCOMMENT THEM AT FIRST PUBLISH — see
+     _dev_/PUBLISHING.md.
 
----
+[![npm](https://img.shields.io/npm/v/langsys-js-server.svg?style=flat)](https://www.npmjs.com/package/langsys-js-server)
+[![bundle size](https://img.shields.io/bundlejs/size/langsys-js-server?style=flat)](https://bundlejs.com/?q=langsys-js-server)
+[![types](https://img.shields.io/npm/types/langsys-js-server.svg?style=flat)](https://www.npmjs.com/package/langsys-js-server)
+[![downloads](https://img.shields.io/npm/dm/langsys-js-server.svg?style=flat)](https://www.npmjs.com/package/langsys-js-server)
+[![license](https://img.shields.io/npm/l/langsys-js-server.svg?style=flat)](./LICENSE)
+-->
+
+[![build](https://img.shields.io/github/actions/workflow/status/langsys/langsys-js-server/ci.yml?style=flat)](https://github.com/langsys/langsys-js-server/actions)
+[![last commit](https://img.shields.io/github/last-commit/langsys/langsys-js-server.svg?style=flat)](https://github.com/langsys/langsys-js-server/commits)
+[![commit activity](https://img.shields.io/github/commit-activity/m/langsys/langsys-js-server.svg?style=flat)](https://github.com/langsys/langsys-js-server/pulse)
+[![license](https://img.shields.io/github/license/langsys/langsys-js-server.svg?style=flat)](./LICENSE)
+
+Server-side SDK for the [Langsys](https://langsys.dev/) Translation Manager. Renders **translated, crawler-visible HTML** during SSR — request-scoped, with no module-global state — on Node, Deno, Bun and Cloudflare Workers.
+
+This is the Node sibling to `langsys-php`. The client SDKs (`langsys-js-typescript` and its `-react`, `-vue`, `-svelte` bindings) translate the DOM after hydration; this package translates the bytes a crawler receives, and hands its catalog to a client SDK to continue from.
+
+## What's inside
+
+- `createLangsysServer(config)` — one instance per server. Stateless HTTP client, no module-level mutable state, safe to create more than one.
+- `langsys.run(options, fn)` — runs a render inside an `AsyncLocalStorage` request scope. Returns `{ value, catalog, locale, missing }`. This is the whole reason the package exists separately from the client SDKs.
+- `t(phrase, category?, params?)` — the everyday translation function, ambient inside `run()`. Full ICU plurals and `{placeholder}` interpolation. Same signature as the base SDK's.
+- `auditRenderedHtml(html)` — reports primitives this version does not translate server-side, so partial coverage is visible rather than silent.
+- `tokenizeHtml` / `deriveBlockIdentity` — the content-block identity path, conformance-tested against the published client SDK so a block keys identically on both sides.
+- Two runtime dependencies (`parse5`, `intl-messageformat`). Ships ESM and CJS with types.
 
 ## Why this exists
 
@@ -37,8 +63,6 @@ which is why this is a separate package rather than a patch.
 | Concurrency | one user | many, interleaved |
 | Render target | DOM | string / stream |
 | Harvest timing | batched, in-session | **fire-and-forget, after response** |
-
----
 
 ## Capability matrix — read this before adopting
 
@@ -83,8 +107,6 @@ a parse in the TTFB path for a check that only matters while you are building.
 > app marks its own block hosts, name the attribute:
 > `auditRenderedHtml(html, logger, { contentBlockAttributes: ['data-block'] })`.
 
----
-
 ## Install
 
 ```bash
@@ -116,30 +138,6 @@ look for. A runtime that is not installed reports `SKIPPED`, never a pass.
 > claimed four runtimes in its README, its `engines` field and its *name*, and ran on
 > two. Nothing in the source was wrong, and no source-level test could have caught it —
 > only executing the built artifact under Deno did.
-
----
-
-## Try it
-
-A runnable SvelteKit example lives in [`example/`](./example), with a mock Langsys API so
-it works offline:
-
-```bash
-npm run example:install
-npm run test:e2e        # boots the built app and runs the SPEC §13 acceptance tests
-```
-
-Or run it by hand and look at the served bytes — which is the only place the difference
-shows:
-
-```bash
-curl -s http://localhost:5570/it | grep '<h1'   # L'idratazione inizia con un'acqua migliore.
-curl -s http://localhost:5570/ru | grep bottles # 3 бутылки  (the Russian FEW form)
-```
-
-The example is not published — `files` keeps it out of the npm tarball.
-
----
 
 ## Quick start
 
@@ -186,7 +184,25 @@ ctx.waitUntil(langsys.flush(result));
 return new Response(result.value);
 ```
 
----
+## Try it
+
+A runnable SvelteKit example lives in [`example/`](./example), with a mock Langsys API so
+it works offline:
+
+```bash
+npm run example:install
+npm run test:e2e        # boots the built app and runs the SPEC §13 acceptance tests
+```
+
+Or run it by hand and look at the served bytes — which is the only place the difference
+shows:
+
+```bash
+curl -s http://localhost:5570/it | grep '<h1'   # L'idratazione inizia con un'acqua migliore.
+curl -s http://localhost:5570/ru | grep bottles # 3 бутылки  (the Russian FEW form)
+```
+
+The example is not published — `files` keeps it out of the npm tarball.
 
 ## Handing off to a client SDK
 
@@ -206,8 +222,6 @@ for **locale in the URL** rather than content negotiation.
 > That is fine when the server emitted base language and a mismatch when it emitted
 > Italian. A synchronous `seedCatalog(catalog, locale)` export has been proposed to the
 > base SDK. Until it lands, expect a hydration flash on the first paint.
-
----
 
 ## Caching and freshness
 
@@ -260,8 +274,6 @@ Invalidation targets the shared key, so one worker's invalidation is every worke
 await langsys.invalidate('it');
 ```
 
----
-
 ## Harvesting
 
 Runtime phrase discovery is the core product mechanic — the phrase *is* the key. A server
@@ -283,8 +295,6 @@ It logs the refusal **once per process, unconditionally**. (The base SDK gates t
 equivalent log behind `if (debug)`; that is deliberately not copied. A log nobody sees by
 default is the same as no log.)
 
----
-
 ## Migrating from the interim `makeCatalogT` helper
 
 If you are running the hand-rolled pure-lookup helper that `langsys-skill` currently
@@ -297,8 +307,6 @@ signature, same overloads, same fallback semantics.
 > it looks like a runaway write loop — and on a write key it is a permanent change to a
 > shared catalog. **Do the first deploy with a read-only key** if you want to see the
 > volume before committing to it.
-
----
 
 ## Known divergences
 
@@ -327,8 +335,6 @@ reader accepts either spelling and the marker never enters `tokens[]`, so emitti
 free.
 
 Reading is live now: `tokenizeHtml` skips subtrees carrying either spelling.
-
----
 
 ## How this package is verified
 
@@ -383,9 +389,7 @@ hydration, a `curl` check shows base language on a correctly working page *and* 
 completely broken one, and cannot distinguish them. That ambiguity is what let the
 original defect survive in four documents.
 
----
-
-## API
+## Full API
 
 ### Configuration
 
@@ -428,8 +432,6 @@ Types: `Catalog`, `CatalogCategory`, `KeyType`, `LangsysServerConfig`, `MissingP
 `RequestScopeOptions`, `RenderResult`, `SharedCache`, `TranslateParams`, `TFunction`,
 `TokenizeOptions`, `AuditFinding`, `AuditResult`, `AuditOptions`, `BlockIdentity`,
 `Derivation`, `Logger`.
-
----
 
 ## License
 

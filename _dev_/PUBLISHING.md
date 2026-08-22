@@ -20,6 +20,16 @@ npm run release
 ./_dev_/publish.sh
 ```
 
+## First publish only — turn the npm badges on
+
+`README.md` carries the family-standard badge block, but the five npm- and bundlejs-derived
+badges are commented out. Until the package exists on the registry, shields.io answers
+`package not found` in red, which reads as a broken package rather than an unpublished one
+(verified against the live shields endpoints, not assumed).
+
+The moment `0.1.0` is on npm, delete the `<!--` / `-->` around that block and drop the
+GitHub license badge that stands in for the npm one. Nothing else in the README changes.
+
 ## What the script does
 
 1. **Verify prerequisites** — in this order; the ordering is load-bearing, see the comments in `publish.sh`
@@ -37,6 +47,7 @@ npm run release
     - Updates `version` in `package.json`
     - Runs `npm install` to refresh `package-lock.json`
     - Runs `npm run build` (tsup → `dist/`)
+    - Runs `_dev_/tarball-acceptance.sh` — packs the tarball, installs it into an empty project resolving only its declared dependencies, and runs an acceptance smoke through both entry points. This runs **after** the version bump on purpose: the bump edits the very file whose `files`, `exports` and `dependencies` blocks decide whether a consumer's first `import` throws. Aborts before anything is pushed or tagged.
 4. **Git operations**
     - Stages `package.json` + `package-lock.json`
     - Amends the latest commit with the version bump appended to its message

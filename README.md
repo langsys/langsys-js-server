@@ -282,9 +282,22 @@ titles, meta) are the ones that never self-register.
 
 Under a read-only key the SDK refuses locally, never makes the call, and leaves the render
 completely unaffected — a read-only key is correct production configuration, not an error.
-It logs the refusal **once per process, unconditionally**. (The base SDK gates the
+It logs the refusal **once per instance, unconditionally**. (The base SDK gates the
 equivalent log behind `if (debug)`; that is deliberately not copied. A log nobody sees by
 default is the same as no log.)
+
+> **When these warnings appear, and why silence is not an all-clear.** Neither warning is
+> emitted at construction, so they will not be in your boot logs:
+>
+> - the missing-`cache` warning fires on the **first catalog resolution** — the first
+>   `run()` or `preloadCatalog()`;
+> - the read-only-key warning fires only when there is **a miss to drain**, and after the
+>   response has flushed.
+>
+> So a page whose copy is fully translated never emits the second one. **Its absence tells
+> you nothing about your key** — it means nothing needed registering. To check a key
+> deliberately, render a phrase you know is unregistered and watch for it, rather than
+> reading a quiet log as confirmation.
 
 ## Migrating from the interim `makeCatalogT` helper
 

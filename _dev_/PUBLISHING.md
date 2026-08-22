@@ -20,15 +20,35 @@ npm run release
 ./_dev_/publish.sh
 ```
 
-## First publish only — turn the npm badges on
+## Before the next release: trusted publishing is NOT configured yet
 
-`README.md` carries the family-standard badge block, but the five npm- and bundlejs-derived
-badges are commented out. Until the package exists on the registry, shields.io answers
-`package not found` in red, which reads as a broken package rather than an unpublished one
-(verified against the live shields endpoints, not assumed).
+`0.1.0` was published **by hand**, not by this script's workflow, and the reason matters
+for `0.1.1`.
 
-The moment `0.1.0` is on npm, delete the `<!--` / `-->` around that block and drop the
-GitHub license badge that stands in for the npm one. Nothing else in the README changes.
+`publish.yml` publishes with OIDC trusted publishing and no token. That requires a trusted
+publisher registered on npmjs.com **for the package**, and a package that does not exist
+yet cannot have one — a chicken-and-egg every first publish in this family hits. Two runs
+failed before the manual bootstrap, and both logs are worth knowing:
+
+1. `npm error code EUSAGE — Can't generate provenance for new or private package, you must
+   set access to public.` `--provenance` requires access to be stated explicitly the first
+   time a name appears. Fixed permanently by `publishConfig.access` in `package.json`.
+   (`--access public` on the command line is a no-op here for a different reason: the name
+   is unscoped, and unscoped packages are always public. Only scoped names default to
+   restricted.)
+2. `npm error 404 Not Found - PUT .../langsys-js-server`. Not a missing package — npm
+   returns 404 rather than 403 for an unauthorized write. The run's environment showed
+   `NODE_AUTH_TOKEN: XXXXX-XXXXX-XXXXX-XXXXX`, the placeholder `actions/setup-node` writes
+   when `registry-url` is set and no token is supplied, and nothing in the log showed an
+   OIDC exchange at all.
+
+**The package now exists, so the missing half can be supplied.** Before tagging `0.1.1`,
+either register a trusted publisher on npmjs.com for `langsys-js-server` pointing at repo
+`langsys/langsys-js-server`, workflow `publish.yml`, environment `npm-publish` — or add an
+`NPM_TOKEN` secret and wire `NODE_AUTH_TOKEN` into the publish step. **Until one of those
+is done, `publish.sh` will create a tag and a GitHub release and then fail at the registry**,
+exactly as it did here. It fails safely — nothing is published — but the tag and release
+have to be deleted and recreated.
 
 ## What the script does
 

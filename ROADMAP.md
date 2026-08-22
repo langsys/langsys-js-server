@@ -234,6 +234,12 @@ aren't translated". A chain of fallbacks is also harder to retire than any link 
   make each of the five fixes a three-repo coordination instead of a two-repo one. Adding
   *cases* stays safe in the meantime; the restructure that would put the attribute list in
   the file as normative data is on hold for the same reason.
-- **Naming.** `-server` rather than `-node` is settled and now *earned*: the built artifact
-  is executed under Node, Deno, Bun and Workers in CI. Formally Darryl's call until first
-  publish.
+- **Naming.** ~~Formally Darryl's call until first publish.~~ **Settled 2026-08-22:**
+  published as `langsys-js-server@0.1.0`. `-server` rather than `-node` is now *earned* as
+  well as decided — the built artifact is executed under Node, Deno, Bun and Workers in CI,
+  and the published tarball was installed from the registry into an empty project and run
+  through both entry points before this line was written.
+- **Trusted publishing is not configured on npm.** `0.1.0` was published by hand because a
+  package that does not exist cannot have a trusted publisher registered against it. The
+  package exists now, so this is a one-time setup — but until it is done, `publish.sh` will
+  tag, release, and then fail at the registry. See `_dev_/PUBLISHING.md`.

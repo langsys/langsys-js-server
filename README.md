@@ -1,22 +1,13 @@
 # Langsys SDK — Server
 
-<!-- Badge block matches langsys-js-typescript / langsys-php. The five npm- and
-     bundlejs-derived badges below resolve only once the package is on the npm registry;
-     until then shields.io returns a red "package not found", which reads as a broken
-     package rather than an unpublished one. UNCOMMENT THEM AT FIRST PUBLISH — see
-     _dev_/PUBLISHING.md.
-
 [![npm](https://img.shields.io/npm/v/langsys-js-server.svg?style=flat)](https://www.npmjs.com/package/langsys-js-server)
+[![build](https://img.shields.io/github/actions/workflow/status/langsys/langsys-js-server/ci.yml?style=flat)](https://github.com/langsys/langsys-js-server/actions)
+[![last commit](https://img.shields.io/github/last-commit/langsys/langsys-js-server.svg?style=flat)](https://github.com/langsys/langsys-js-server/commits)
+[![commit activity](https://img.shields.io/github/commit-activity/m/langsys/langsys-js-server.svg?style=flat)](https://github.com/langsys/langsys-js-server/pulse)
 [![bundle size](https://img.shields.io/bundlejs/size/langsys-js-server?style=flat)](https://bundlejs.com/?q=langsys-js-server)
 [![types](https://img.shields.io/npm/types/langsys-js-server.svg?style=flat)](https://www.npmjs.com/package/langsys-js-server)
 [![downloads](https://img.shields.io/npm/dm/langsys-js-server.svg?style=flat)](https://www.npmjs.com/package/langsys-js-server)
 [![license](https://img.shields.io/npm/l/langsys-js-server.svg?style=flat)](./LICENSE)
--->
-
-[![build](https://img.shields.io/github/actions/workflow/status/langsys/langsys-js-server/ci.yml?style=flat)](https://github.com/langsys/langsys-js-server/actions)
-[![last commit](https://img.shields.io/github/last-commit/langsys/langsys-js-server.svg?style=flat)](https://github.com/langsys/langsys-js-server/commits)
-[![commit activity](https://img.shields.io/github/commit-activity/m/langsys/langsys-js-server.svg?style=flat)](https://github.com/langsys/langsys-js-server/pulse)
-[![license](https://img.shields.io/github/license/langsys/langsys-js-server.svg?style=flat)](./LICENSE)
 
 Server-side SDK for the [Langsys](https://langsys.dev/) Translation Manager. Renders **translated, crawler-visible HTML** during SSR — request-scoped, with no module-global state — on Node, Deno, Bun and Cloudflare Workers.
 

@@ -227,14 +227,22 @@ aren't translated". A chain of fallbacks is also harder to retire than any link 
   from the DOM is an identity nobody can debug.** Additive and cannot affect `tokens[]`;
   the base SDK owner measured that it changes only the `content` snapshot, so the stamp
   must be written AFTER `tokenizeElement` returns.
-  **The day it lands, two documents become wrong and must be rewritten together:** the
-  README capability matrix's detection column (which currently says a `<Translate>` host
-  carries no marker, so `auditRenderedHtml()` cannot see it and `contentBlockAttributes`
-  is the workaround) and `langsys-skill`'s mirror of that matrix in `core/server-sdk.md`.
-  They are two statements of one fact in two repos; fixing one alone leaves the family
-  contradicting itself. Note the asymmetry that makes the column subtle in the first
-  place: the audit *does* find `<Phrase>`, because that primitive puts its marker in the
-  markup — it is only `<Translate>` that is invisible.
+  **The day it lands, five documents become wrong and must be rewritten together** — one
+  here and four in `langsys-skill`, enumerated because the count is the surprise:
+
+  - this repo's README capability matrix, detection column
+  - `src/skill/core/server-sdk.md` line 28, the mirror of that matrix
+  - `src/skill/ssr/{sveltekit,nextjs,nuxt}.md` — these **restate** the claim inline
+    (*"nothing signals that for `<Translate>`, since its host carries no marker"*) rather
+    than only linking to the matrix, so each goes wrong on its own
+
+  It is one fact stated five times across two repos; fixing the matrix alone leaves three
+  framework guides contradicting it. Note the asymmetry that makes the column subtle in
+  the first place: the audit *does* find `<Phrase>`, and unconditionally — `audit.ts:109`
+  scans `[...PHRASE_MARKER_ATTRS, ...blockAttrs]`, where the phrase markers are fixed
+  constants but the block markers default to `CONTENT_BLOCK_MARKERS`, recorded at
+  `audit.ts:66` as occurring **0 times** in the published dist. Only `<Translate>` is
+  invisible, and the stamp is what would close that gap.
 - **Shared conformance fixtures.** `langsys-php` owns `tests/fixtures/tokenizer-reference.json`
   and has asked that this package assert against it **in place** rather than moving it
   somewhere neutral. **They will regenerate it against corrected behaviour once the re-key

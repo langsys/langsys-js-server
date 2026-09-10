@@ -227,6 +227,14 @@ aren't translated". A chain of fallbacks is also harder to retire than any link 
   from the DOM is an identity nobody can debug.** Additive and cannot affect `tokens[]`;
   the base SDK owner measured that it changes only the `content` snapshot, so the stamp
   must be written AFTER `tokenizeElement` returns.
+  **The day it lands, two documents become wrong and must be rewritten together:** the
+  README capability matrix's detection column (which currently says a `<Translate>` host
+  carries no marker, so `auditRenderedHtml()` cannot see it and `contentBlockAttributes`
+  is the workaround) and `langsys-skill`'s mirror of that matrix in `core/server-sdk.md`.
+  They are two statements of one fact in two repos; fixing one alone leaves the family
+  contradicting itself. Note the asymmetry that makes the column subtle in the first
+  place: the audit *does* find `<Phrase>`, because that primitive puts its marker in the
+  markup — it is only `<Translate>` that is invisible.
 - **Shared conformance fixtures.** `langsys-php` owns `tests/fixtures/tokenizer-reference.json`
   and has asked that this package assert against it **in place** rather than moving it
   somewhere neutral. **They will regenerate it against corrected behaviour once the re-key

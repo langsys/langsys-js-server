@@ -65,8 +65,10 @@ export function createLogger(debugEnabled: boolean): Logger {
  * there on why a process-wide latch across instances was a defect.
  *
  * NOTE this is the only module-scoped mutable state in the package. It is a `Set` of
- * string literals that is only ever added to: never read for behaviour, never
- * request-varying, never carrying tenant data.
+ * string literals holding warning KEYS, read on the line below to decide whether a given
+ * warning has already been printed — so it is read, but only ever to suppress a duplicate
+ * log. It never reaches translation output, never varies per request, and never carries
+ * tenant data, which is what makes it safe to share across concurrent requests.
  */
 const emittedOnce = new Set<string>();
 

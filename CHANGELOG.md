@@ -15,7 +15,8 @@ server rendering.
 - `createLangsysServer()` / `langsys.run()` — request-scoped translation context backed by
   `AsyncLocalStorage`. Nothing request-varying lives outside that scope: the only
   module-scoped mutable state in the package is a once-per-process warning latch in
-  `logger.ts` (add-only, never read for behaviour, never carrying tenant data), and
+  `logger.ts` (a set of warning keys, read only to suppress a duplicate log — it never
+  reaches translation output, never varies per request, never carries tenant data), and
   `LangsysServer` holds the discovered key type as instance state, which is a property of
   the API key rather than of a request.
 - `t(phrase, category?, params?)` — signature-compatible with the client SDKs, with full
@@ -25,7 +26,8 @@ server rendering.
 - Catalog caching with single-flight coalescing, absolute expiry stamped at write time,
   and an optional `SharedCache` tier for multi-worker deployments.
 - `tokenizeHtml()` — string-based content-block tokenizer, differentially tested against
-  `langsys-js-typescript@0.6.5`'s DOM walker over 60+ cases.
+  `langsys-js-typescript@0.6.5`'s DOM walker over a 52-case corpus, plus 2 cases that
+  assert a deliberate divergence rather than skipping it.
 - `deriveBlockIdentity()` — `custom_id` plus read-side fallback derivations, so blocks
   registered under a sibling's or a historical derivation still resolve.
 - `auditRenderedHtml()` — reports primitives this version does not translate server-side,
@@ -38,6 +40,13 @@ server rendering.
   SKIPPED, never a pass.
 - `tests/build-output.test.ts` — assertions about the built artifact rather than the
   source, because a build step can silently falsify a claim the source makes correctly.
+- `_dev_/tarball-acceptance.sh` — packs the tarball, installs it into an empty project
+  resolving only the DECLARED dependencies, and runs an acceptance smoke through both the
+  ESM and CJS entry points. Every other suite drives the working tree, where every
+  devDependency is present and every source file is readable regardless of the `files`
+  allowlist. Paired with `_dev_/check-externals.mjs`, which compares the shipped bundle's
+  imports against the shipped manifest — the check that catches a consumer's
+  `ERR_MODULE_NOT_FOUND` before the consumer does.
 - `example/` — a runnable SvelteKit app with a mock Langsys API, and `tests/e2e/` which
   boots its built adapter-node output and asserts SPEC §13's definition of done:
   Italian body copy in the served bytes, Russian plurals, 120 interleaved requests

@@ -26,6 +26,19 @@ function escapeForRegExp(key: string): string {
 }
 
 /**
+ * The keys `%name%` is actually adopted for.
+ *
+ * Must match `normalizeMarkupPlaceholders` in the core EXACTLY, not approximately: the
+ * rewrite only fires for identifiers, so `%a.b%` is never substituted and a param supplied
+ * under `a.b` genuinely IS unused. Accepting it here would suppress a correct warning —
+ * a false negative, which hides a real mistake, where the bug this whole helper fixes was
+ * a false positive that merely misdirected one.
+ *
+ * The brace spelling takes ANY key, so only the percent branch is gated.
+ */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
  * Param keys with no matching placeholder in any of `texts`.
  *
  * `{key}` is matched with optional inner whitespace and an ICU-aware terminator, so
@@ -40,8 +53,8 @@ export function findUnusedParamKeys(texts: string[], params?: TranslateParams): 
     const haystack = texts.join('\0');
     return keys.filter((key) => {
         const escaped = escapeForRegExp(key);
-        const braced = new RegExp(`\\{\\s*${escaped}\\s*[,}]`);
-        const percent = new RegExp(`%${escaped}%`);
-        return !braced.test(haystack) && !percent.test(haystack);
+        if (new RegExp(`\\{\\s*${escaped}\\s*[,}]`).test(haystack)) return false;
+        if (IDENTIFIER.test(key) && new RegExp(`%${escaped}%`).test(haystack)) return false;
+        return true;
     });
 }

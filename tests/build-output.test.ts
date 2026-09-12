@@ -51,15 +51,58 @@ describe.skipIf(!built)('built artifact', () => {
     });
 
     it('does not bundle the base SDK singleton graph', () => {
-        // The whole reason this package consumes `langsys-js-typescript/pure` rather than
-        // the core's main entry: importing the main entry instantiates LangsysApp,
-        // Translations, the shared miss queue and the shared auth header at module scope —
-        // module-global state inside a server process, which is the one thing this package
-        // exists to avoid. The subpath is side-effect-free by construction; this catches a
-        // stray import that reaches past it to the real package.
+        /**
+         * The whole reason this package consumes `langsys-js-typescript/pure` rather than
+         * the core's main entry: importing the main entry instantiates LangsysApp,
+         * Translations, the shared miss queue and the shared auth header at module scope —
+         * module-global state inside a server process, which is the one thing this package
+         * exists to avoid.
+         *
+         * **The probe shape is the load-bearing part, not the name list.** An earlier
+         * version of this test asserted only that `dist` carried no bare
+         * `from 'langsys-js-typescript'` import. That assertion **cannot fail**: the core
+         * is a devDependency, so tsup treats it as internal and BUNDLES it — a real import
+         * of the singleton graph produces no import statement at all, just 64KB of inlined
+         * module-scope state. Measured: adding `import { LangsysApp } from
+         * 'langsys-js-typescript'` to `src/index.ts` left the import assertion green while
+         * `dist/index.mjs` went from 51,901 to 116,302 bytes and gained 37 singleton
+         * markers.
+         *
+         * So this greps for the graph's own symbols in the OUTPUT, which is what actually
+         * ships. The TypeScript lane found the same class of hole in their DOM guard the
+         * same day — a trap keyed on names the code never touched — and the lesson
+         * generalises: check what the probe can observe, not how long its list is.
+         */
         const esm = readFileSync(distEsm, 'utf8');
+
+        // Still asserted, for the case where the core becomes a runtime dependency and is
+        // therefore external. It is not sufficient on its own — see above.
         expect(esm).not.toMatch(/from ['"]langsys-js-typescript['"]/);
-        expect(esm).not.toMatch(/new LangsysAppClass\(\)/);
+
+        // The part that can actually fail today.
+        const SINGLETON_MARKERS = [
+            'LangsysAppAPI',
+            'sTranslations',
+            'LangsysAppClass',
+            'registerContentBlock',
+            'setWriteGrant',
+        ];
+        for (const marker of SINGLETON_MARKERS) {
+            expect(esm, `dist contains "${marker}" — the singleton graph is bundled`).not.toContain(
+                marker,
+            );
+        }
+    });
+
+    it('POSITIVE CONTROL: those markers really do exist in the core main entry', () => {
+        // Without this the assertion above passes against a marker list of names nobody
+        // ever emits — which is precisely the hole it was written to close, one level up.
+        const core = readFileSync(
+            new URL('../node_modules/langsys-js-typescript/dist/index.mjs', import.meta.url),
+            'utf8',
+        );
+        expect(core).toContain('LangsysAppAPI');
+        expect(core).toContain('sTranslations');
     });
 
     it('declares no module-level mutable catalog state', () => {

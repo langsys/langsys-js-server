@@ -149,7 +149,7 @@ export const KNOWN_DIVERGENCES: Case[] = [
     {
         name: 'script content is NOT harvested here',
         html: '<div><p>Keep</p><script>window.dataLayer.push({event:"view"});</script></div>',
-        proves: 'the base SDK and PHP both queue analytics JS for permanent catalog registration; this package does not',
+        proves: 'this package excludes code-bearing subtrees. The base SDK and PHP BOTH did queue analytics JS for permanent registration when this case was written; both have since fixed it (core 6596faf, php e28972c, re-measured by execution). Kept because the exclusion still has to hold, not because the others still get it wrong',
     },
     {
         name: 'style content is NOT harvested here',

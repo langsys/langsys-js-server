@@ -5,9 +5,9 @@
 | **SDK** | `langsys-js-server` (server-side JS, the Node sibling to `langsys-php`) |
 | **Profiles** | `all`, `server` |
 | **specVersion** | 8 (published) |
-| **Spec revision read** | langsys `c6b08d11`, `docs/sdk-spec.mdx` blob `042dedb5b533499a277b88fc9e2ee39ef30a0b89`. Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree c6b08d11 docs/sdk-spec.mdx` |
-| **SDK revision** | `feature/838_write_key_gating` at `7ad7c0a`+ (this commit), cut from `origin/main` `5f37284` |
-| **Core** | `langsys-js-typescript/pure` at **`1caf7fb`** — the exact sibling commit the numbers below were measured against. Unpublished and resolved through a symlink, so this pin is load-bearing: an earlier revision of this file named `6596faf` while the symlink had already moved, which is the release precondition at the foot of this file happening to the file itself |
+| **Spec revision read** | `docs/sdk-spec.mdx` blob **`8e2527b9f30e4e8a38121eeb7c401d4db60dfa6c`**, specVersion **8.0.1**. Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree origin/feature/838_write_key_gating docs/sdk-spec.mdx` at this write, not carried from the previous revision — six spec hashes have reached this lane and five are superseded |
+| **SDK revision** | `feature/838_write_key_gating` at this commit, cut from `origin/main` `5f37284` |
+| **Core** | `langsys-js-typescript/pure` at **`5c5e7d3`** — the exact sibling commit the numbers below were measured against. Unpublished and resolved through a symlink, so this pin is load-bearing: an earlier revision of this file named `6596faf` while the symlink had already moved, which is the release precondition at the foot of this file happening to the file itself |
 | **Suite** | 416 passing, 1 skipped, 12 files. Plus 4 runtimes × 26 conformance checks, 15 e2e, 1 tarball acceptance |
 | **Reproducing the suite** | Two preconditions, neither obvious from `npm test`: run **`npm run build` first** (several tests are dist-gated and silently skip without it), and have **`../langsys-php-sdk` checked out** (`shared-fixtures.test.ts` hard-fails without it, by design — see CONF-2 on absence versus agreement). Without both, a clean archive reports 393 passing / 6 skipped / 1 failed |
 
@@ -23,11 +23,11 @@ By profile:
     6  binding
 
 By status (binding rules only):
-   21  implemented
    20  provisional
+   20  implemented
     4  provisional (no test)
     4  **gap**
-    1  **partial**
+    2  **partial**
     1  n/a (architecture: no report lane)
     1  **partial — server half only**
     1  **not met**
@@ -152,7 +152,7 @@ is ever added, this carve-out is void and the decision must move fully per-reque
 | CID-2 | all | implemented | n/a (pure) | `cid-2` — the `'__uncategorized__'` sentinel is coalesced **at the boundary** in `deriveBlockIdentity`, asserted on the whole derivation set rather than the primary id. `generateLegacyCustomId` deliberately does not coalesce, so the sentinel previously emitted a fallback an empty category never did: equal primaries, unequal fallback sets |
 | CID-3 | all | implemented | n/a (pure) | `derivations` "the two historical LEGACY-token shapes" — pinned to `HISTORICAL_TRANSLATABLE_ATTRIBUTES_15` so they reproduce what was actually stored. Registration always uses the corrected derivation; the legacy ids are read-only |
 | CID-4 | all | provisional (no test) | none | Code: `derivations.ts` dedups by id so a collapsed derivation is not counted twice. No test verifies content before attaching to a legacy match |
-| TOK-1 | all | implemented | n/a (contract fixture) | `walker-parity` "TOK-1 — noscript is EXCLUDED" — no token for a noscript body, **plus the ordinary-markup control the rule names**, plus a control asserting the two pre-exclusion ids genuinely differed. `SKIP_ELEMENTS` is a re-export of the core's `NON_TRANSLATABLE_ELEMENTS`, so it cannot drift |
+| TOK-1 | all | **partial** | n/a (contract fixture) | Met for `script`/`style`/`template`/`noscript`, with the ordinary-markup control the rule names. **`<math>` is NOT excluded and 8.0.1 requires it.** Measured: this package gives `['Area','x','+','2','units']` where the rule and `langsys-php` (already conformant at `e28972c`, verified by executing `extractPhrases`) give `['Area','units']`. Not fixed unilaterally — `SKIP_ELEMENTS` re-exports the core's list, and overriding it would split ids with our own hydration partner on every block containing a `<math>`. Core first, then here, exactly as noscript went. A test flips red when the core ships it |
 | TOK-2 | all | implemented | n/a (pure) | Met for free and deliberately not over-implemented: `tokenizer.ts` uses a plain `/\s+/g`, and JS `\s` already matches U+00A0. The rule forbids adding a redundant character class |
 | TOK-3 | all | implemented | n/a (contract fixture) | `attribute-list-pin` — the 27, **in order**, pinned against a literal transcribed by hand from `langsys-php`'s `HtmlParser.php` rather than sliced from the constant, which since convergence *is* the core's array |
 | TOK-4 | all | implemented | n/a (contract fixture) | Attribute values **and `<option>` text** go through the core's `normalizeTokenText`. Covered by the core's `canonicalization-reference.json`, blob **`e4c1f185`**, 19 rows, 19 pass |
@@ -211,22 +211,26 @@ single-branch regression is caught by exactly one of them.
 
 ## Gaps, ranked by cost
 
-1. **GATE-2 — unknown is collapsed into refused, not held.** The rule says hold; the send
+1. **TOK-1 `<math>` — required by 8.0.1, not excluded here.** Blocked on the core rather
+   than on effort: the exclusion list is a re-export, and going first splits ids with the
+   client SDK we hydrate over. PHP already ships it, so this is the last of the three
+   implementations to move.
+2. **GATE-2 — unknown is collapsed into refused, not held.** The rule says hold; the send
    site consumes the batch and refuses. Cheap to fix and cheap in consequence (the scope
    dies with the request either way), but it is a real divergence from the rule's text
    rather than a missing test, and it was rowed as the latter until a review caught it.
-2. **MARK-1 — nothing emits a marker.** Server-rendered hosts carry no resolved id, so the
+3. **MARK-1 — nothing emits a marker.** Server-rendered hosts carry no resolved id, so the
    client-DOM parity probe cannot key on anything and `auditRenderedHtml` reports clean on
    a page it cannot see into. 0.2.0.
-3. **SRV-5 — no component child capture.** 0.2.0, and the piece the roadmap calls the real
+4. **SRV-5 — no component child capture.** 0.2.0, and the piece the roadmap calls the real
    next work.
-4. **REG-8 — no retry or backoff.** A failed batch is consumed and dropped.
-5. **REG-11 — no ellipsis warning.** Nothing implemented.
-6. **SRV-4 round-trip untested.** Blocked on the core's synchronous seed.
-7. **GATE-3, CID-4, ICU-4, REG-12 have no test pointing at them.** Each is defensible by
+5. **REG-8 — no retry or backoff.** A failed batch is consumed and dropped.
+6. **REG-11 — no ellipsis warning.** Nothing implemented.
+7. **SRV-4 round-trip untested.** Blocked on the core's synchronous seed.
+8. **GATE-3, CID-4, ICU-4, REG-12 have no test pointing at them.** Each is defensible by
    reading the code, which is exactly the row CONF-1 says to distrust. (REG-6 was on this
    list and now has one; GATE-2 moved up as a real divergence rather than a test gap.)
-8. **CONF-1 unmet fleet-wide** — the shared contract fixture does not exist, which caps
+9. **CONF-1 unmet fleet-wide** — the shared contract fixture does not exist, which caps
    every transport row at `provisional`.
 
 ## Release-wave preconditions

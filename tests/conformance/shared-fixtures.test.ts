@@ -52,7 +52,7 @@ const CORE_FIXTURE = new URL(
     import.meta.url,
 );
 /** The spec blob the core measured its rows against. */
-const CORE_FIXTURE_SPEC_BLOB = 'b657b490f07615b889081c0ac5244ec4bd73bf81';
+const CORE_FIXTURE_SPEC_BLOB = '8e2527b9f30e4e8a38121eeb7c401d4db60dfa6c';
 
 const phpPresent = existsSync(PHP_FIXTURE);
 const corePresent = existsSync(CORE_FIXTURE);
@@ -150,8 +150,11 @@ describe.skipIf(!corePresent)('langsys-js-typescript canonicalization-reference.
         expect(coreFixture.spec_blob ?? '').toContain(CORE_FIXTURE_SPEC_BLOB);
     });
 
-    it('has the nineteen rows the core authored', () => {
-        expect(coreFixture.cases).toHaveLength(19);
+    it('has the twenty-three rows the core authored', () => {
+        // Was 19 against spec blob b657b490. Grew with 8.0.1, and the pin above fired on
+        // the spec_blob change rather than letting superseded expectations pass quietly —
+        // which is the whole reason that assertion exists.
+        expect(coreFixture.cases).toHaveLength(23);
     });
 
     it.each(coreFixture.cases.map((c) => [c.id, c] as const))('%s', (_id, row) => {

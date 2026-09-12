@@ -17,6 +17,7 @@ import { Window } from 'happy-dom';
 import { tokenizeElement, legacyTokenizeElement, generateCustomId } from 'langsys-js-typescript';
 import { tokenizeHtml } from '../../src/tokenizer.js';
 import { generateCustomId as ourGenerateCustomId } from 'langsys-js-typescript/pure';
+import { SKIP_ELEMENTS as SKIP_ELEMENTS_FOR_TEST } from '../../src/constants.js';
 import { CORPUS, KNOWN_DIVERGENCES } from './corpus.js';
 
 /** Run the published DOM walker over the same inner HTML. */
@@ -244,5 +245,52 @@ describe('TOK-1 — noscript is EXCLUDED, and the parser contract is still pinne
     it('scriptingEnabled is still pinned for the REST of the document', () => {
         // Independent of noscript: a raw-text context the flag also governs.
         expect(tokenizeHtml('<p>Keep</p><script>var a = 1;</script>')).toEqual(['Keep']);
+    });
+});
+
+
+describe('TOK-1 — <math> is required by 8.0.1 and this package does NOT exclude it yet', () => {
+    /**
+     * **A gap recorded as a gap, with a test that flips when it closes.** Spec 8.0.1 adds
+     * `<math>` to TOK-1's exclusion list. `langsys-php` already ships it
+     * (`NON_PROSE_ELEMENTS` at `e28972c`, measured by executing `extractPhrases`). The
+     * JS core does not, and `SKIP_ELEMENTS` here is a re-export of the core's list — so
+     * this package does not either.
+     *
+     * **Not fixed unilaterally, deliberately.** Overriding the re-export would make this
+     * package disagree with its own hydration partner on every block containing a
+     * `<math>`: we would derive one id, the client core another, for the same DOM on the
+     * same request. That is the noscript ordering exactly, and it went the right way round
+     * then — core first, then here. CLAUDE.md rule 3 is the standing form of it.
+     *
+     * Measured three ways on `<p>Area <math><mi>x</mi><mo>+</mo><mn>2</mn></math> units</p>`:
+     *
+     *   spec 8.0.1 requires   ['Area', 'units']
+     *   langsys-php gives     ['Area', 'units']      (already conformant)
+     *   this package gives    ['Area', 'x', '+', '2', 'units']
+     *
+     * When the core ships it this test goes red, which is the signal to move — the same
+     * shape as the attribute-list pin that fired when the twenty-seven landed.
+     */
+    const MATH = '<p>Area <math><mi>x</mi><mo>+</mo><mn>2</mn></math> units</p>';
+
+    it('currently tokenizes math content — and must stop when the core does', () => {
+        expect(
+            SKIP_ELEMENTS_FOR_TEST.includes('math'),
+            'The core now excludes <math>. Delete this test, and the TOK-1 gap row in ' +
+                'CONFORMANCE.md, and re-measure the corpus — the exclusion arrives ' +
+                'automatically through the re-export.',
+        ).toBe(false);
+        expect(tokenizeHtml(MATH)).toEqual(['Area', 'x', '+', '2', 'units']);
+    });
+
+    it('CONTROL: <svg> text IS tokenized, and that is correct, not the same gap', () => {
+        // 8.0.1 keeps svg excluded-from-exclusion: the parent's direct text must survive
+        // an inline svg and svg <text> must be harvested. Measured as agreeing with PHP.
+        expect(tokenizeHtml('<p>Area <svg><text>label</text></svg> units</p>')).toEqual([
+            'Area',
+            'label',
+            'units',
+        ]);
     });
 });

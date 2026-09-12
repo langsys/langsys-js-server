@@ -244,16 +244,23 @@ function walkForTokens(
         }
 
         if (isTextNode(node)) {
-            // JS `\s` matches U+00A0, so `&nbsp;` collapses here. `langsys-php`'s
-            // `normalizeWhitespace()` uses PCRE `\s` with no `/u` modifier, which is
-            // ASCII-only, and its `trim()` default charlist excludes U+00A0 — so PHP
-            // RETAINS it. `<p>&nbsp;</p>` is one token there and zero here.
+            // JS `\s` matches U+00A0, so `&nbsp;` collapses here — and as of
+            // `langsys-php` `e28972c`, PHP collapses it too. **This comment used to say
+            // the opposite**, describing PHP's `normalizeWhitespace()` as ASCII-only PCRE
+            // with a `trim()` charlist that excluded U+00A0, and concluding
+            // `<p>&nbsp;</p>` was one token there and zero here. That was true when it was
+            // written and is no longer.
             //
-            // That divergence is real, known, and NOT resolved by this package: it is a
-            // product decision (SPEC.md open question #10) that changes the token COUNT,
-            // and whichever way it goes it orphans existing catalog entries. This
-            // package matches the JS client family, which is the partner it hydrates
-            // over on every request.
+            // Re-measured by EXECUTING their parser rather than reading it
+            // (`extractPhrases` at `e28972c`, PHP 8.3.19): `<p>&nbsp;</p>` → `[]`,
+            // `<p>Buy\u00A0now</p>` → `["Buy now"]`, `<p>a\u2028b</p>` → `["a b"]`. All
+            // three agree with this package now.
+            //
+            // Kept as a correction rather than deleted, because the failure mode is the
+            // interesting part: a divergence note ages into a false claim the moment the
+            // other lane fixes something, and nothing here would have failed. The TS lane
+            // hit the same thing — their self-cleaning test checked that a divergence
+            // carried a NOTE, not that it was still TRUE.
             const contentToken = node.value.replace(/\s+/g, ' ').trim();
             if (contentToken) tokens.push(normalizeMarkupPlaceholders(contentToken));
             continue;

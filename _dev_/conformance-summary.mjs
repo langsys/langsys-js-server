@@ -28,7 +28,7 @@ const text = readFileSync(FILE, 'utf8');
  * Rows look like `| GATE-1 | provisional | mock | … |`. Anchored on a rule id so the
  * header row, the separator and any prose table elsewhere in the file cannot be counted.
  */
-const ROW = /^\|\s*([A-Z]{3,5}-[0-9].*?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|/gm;
+const ROW = /^\|\s*([A-Z]{3,5}-[0-9].*?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|/gm;
 
 /**
  * Expand a cell like `HINT-1, 3–12`, `SSR-1..3` or `GRANT-1..4` into individual rule ids.
@@ -58,7 +58,7 @@ const rows = [];
 for (const m of text.matchAll(ROW)) {
     const ids = expand(m[1]);
     if (!ids.length) continue;
-    for (const id of ids) rows.push({ id, status: m[2].trim(), evidence: m[3].trim(), row: m[1] });
+    for (const id of ids) rows.push({ id, profile: m[2].trim(), status: m[3].trim(), evidence: m[4].trim(), row: m[1] });
 }
 const rowCount = new Set(rows.map((r) => r.row)).size;
 
@@ -70,25 +70,40 @@ if (rows.length === 0) {
 const tally = (key) =>
     rows.reduce((acc, r) => ((acc[r[key]] = (acc[r[key]] ?? 0) + 1), acc), /** @type {Record<string, number>} */ ({}));
 
-const byStatus = tally('status');
-const byEvidence = tally('evidence');
 const families = new Set(rows.map((r) => r.id.split('-')[0]));
 
-// Rows this lane actually owes an answer for, as opposed to rows that are someone else's
-// profile. The distinction is the whole point of a profiled spec: `n/a` is not a pass and
-// it is not a gap, it is a statement that the rule cannot bind here.
-const binding = rows.filter((r) => !r.status.startsWith('n/a'));
+/**
+ * Rows this lane owes an answer for, decided by PROFILE — the rule's own field — not by
+ * whether its status happens to start with `n/a`.
+ *
+ * Counting by status prefix was wrong twice over: it let a row opt itself out of the
+ * denominator by how it was worded, and it mis-binned `n/a (vacuous)`, which is a
+ * statement about a binding rule being unfalsifiable here rather than about the rule not
+ * applying. A rule is this lane's if its profile is `all` or `server`; everything else is
+ * someone else's and is neither a pass nor a gap.
+ */
+const OURS = new Set(['all', 'server']);
+const binding = rows.filter((r) => OURS.has(r.profile));
+
+const byStatus = binding.reduce((acc, r) => ((acc[r.status] = (acc[r.status] ?? 0) + 1), acc), /** @type {Record<string, number>} */ ({}));
+const byEvidence = binding.reduce((acc, r) => ((acc[r.evidence] = (acc[r.evidence] ?? 0) + 1), acc), /** @type {Record<string, number>} */ ({}));
+
 
 const lines = [
     `${rows.length} rules across ${families.size} families, in ${rowCount} table rows`,
-    `${binding.length} bind this profile · ${rows.length - binding.length} are n/a for it`,
+    `${binding.length} bind all/server · ${rows.length - binding.length} are another profile's`,
     '',
-    'By status:',
+    'By profile:',
+    ...Object.entries(tally('profile'))
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `  ${String(v).padStart(3)}  ${k}`),
+    '',
+    'By status (binding rules only):',
     ...Object.entries(byStatus)
         .sort((a, b) => b[1] - a[1])
         .map(([k, v]) => `  ${String(v).padStart(3)}  ${k}`),
     '',
-    'By evidence grade (CONF-2):',
+    'By evidence grade, binding rules only (CONF-2):',
     ...Object.entries(byEvidence)
         .sort((a, b) => b[1] - a[1])
         .map(([k, v]) => `  ${String(v).padStart(3)}  ${k}`),

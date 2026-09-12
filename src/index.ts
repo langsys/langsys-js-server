@@ -66,6 +66,34 @@ export type {
 const SCOPE = Symbol('langsys.scope');
 
 /**
+ * Marks a catalog that came back from a FAILED fetch, so `run()` can tell it apart from
+ * one a host built or fetched successfully.
+ *
+ * `preloadCatalog()` returns a plain `Catalog` and must keep doing so — it is public API,
+ * and the object is handed straight to a framework's serialiser (`event.locals` in
+ * SvelteKit) on the documented path. So the signal rides along as a non-enumerable Symbol
+ * property: invisible to `JSON.stringify`, to `Object.keys`, to devalue, and to anything
+ * else that walks the catalog, while surviving the one hop that matters — host variable to
+ * `run({ catalog })` in the same process.
+ *
+ * Absence means available, which is the fail-safe default: a hand-built catalog carries no
+ * marker and registers normally. Only a fetch this package performed and watched fail can
+ * set it.
+ */
+const CATALOG_FAILED = Symbol('langsys.catalogFailed');
+
+/** Tag a catalog object as the product of a failed fetch, without changing its shape. */
+function markUnavailable(catalog: Catalog): Catalog {
+    Object.defineProperty(catalog, CATALOG_FAILED, {
+        value: true,
+        enumerable: false,
+        writable: false,
+        configurable: true,
+    });
+    return catalog;
+}
+
+/**
  * How long to wait before retrying a failed project authorization.
  *
  * Authorize sits in front of TTFB. Retrying on every request turns a backend problem
@@ -244,6 +272,14 @@ export class LangsysServer {
         let catalog: Catalog;
         let catalogAvailable = true;
         if (options.catalog) {
+            // A caller-supplied catalog is available UNLESS it is carrying the failed-fetch
+            // marker `preloadCatalog()` puts on it, or the caller says otherwise outright.
+            // The first version of this trusted the caller unconditionally, on the reasoning
+            // that handing us a catalog is taking responsibility for it — which is wrong in
+            // exactly the case that matters, because a host cannot take responsibility for a
+            // failure this package never told it about. That left the documented
+            // preloadCatalog → run path storming while the inline path was fixed.
+            catalogAvailable = !(CATALOG_FAILED in options.catalog);
             catalog = normalizeCatalog(options.catalog);
         } else if (locale === this.baseLocale) {
             // The base locale has no catalog to fetch: phrases are already written in it.
@@ -257,6 +293,10 @@ export class LangsysServer {
             catalog = resolved.catalog;
             catalogAvailable = resolved.ok;
         }
+
+        // An explicit option always wins. A host that fetches its own catalog and knows the
+        // fetch failed has no other way to say so.
+        if (options.catalogAvailable !== undefined) catalogAvailable = options.catalogAvailable;
 
         const scope: RequestScope = {
             locale,
@@ -336,10 +376,15 @@ export class LangsysServer {
     async preloadCatalog(locale: string): Promise<Catalog> {
         const canonical = canonicalizeLocale(locale);
         if (canonical === this.baseLocale) return normalizeCatalog({});
-        // Public API returns the catalog alone. A caller pre-loading one and handing it to
-        // `run({ locale, catalog })` is declaring it authoritative, which is why that path
-        // counts as available: the host has taken responsibility for the answer.
-        return (await this.catalogs.get(canonical)).catalog;
+
+        // Still a plain `Catalog`, because this is public API and the object goes straight
+        // into a framework's serialised payload. When the fetch FAILED the result carries a
+        // non-enumerable marker so `run({ catalog })` can decline to register against it —
+        // see CATALOG_FAILED. Without that, the documented preload path re-registers every
+        // phrase on the page during an API outage, which is the defect WIRE-4 clause 2
+        // names and which this package shipped on that path after fixing it on the other.
+        const resolved = await this.catalogs.get(canonical);
+        return resolved.ok ? resolved.catalog : markUnavailable(resolved.catalog);
     }
 
     /** Drop a locale's cached catalog across every worker sharing the configured cache. */

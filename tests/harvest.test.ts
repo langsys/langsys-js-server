@@ -555,6 +555,60 @@ describe('WIRE-4 clause 2 — a failed catalog fetch registers NOTHING', () => {
         expect(err.mock.calls.map((c) => c.join(' ')).some((m) => m.includes('Catalog fetch'))).toBe(true);
     });
 
+    it('the PRELOAD path does not storm either — preloadCatalog() then run({ catalog })', async () => {
+        /**
+         * The shape the reference integration actually uses. `example/src/hooks.server.ts`
+         * calls `preloadCatalog(locale)` and hands the result to `run({ locale, catalog })`,
+         * because SvelteKit's `+layout.server.ts` reads `event.locals` during
+         * `resolve(event)` and assigning after `run()` is too late.
+         *
+         * The first version of this fix guarded only the INLINE fetch inside `run()`. This
+         * path bypassed it completely: `preloadCatalog` discarded the `ok` flag, and a
+         * caller-supplied catalog was counted as authoritative on the grounds that the
+         * host had taken responsibility for it. The host cannot take responsibility for a
+         * failure it was never told about — measured at that commit, this path produced
+         * the identical pre-fix numbers, 40 queued and one POST of 40.
+         */
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const h = harness({ catalogFails: true });
+
+        const catalog = await h.langsys.preloadCatalog('it');
+        const result = await h.langsys.run({ locale: 'it', catalog }, () => {
+            for (let i = 0; i < 40; i++) t(`Phrase ${i}`);
+            return 'done';
+        });
+        await settleDrain();
+        await h.langsys.flush(result);
+
+        expect(result.missing).toHaveLength(0);
+        expect(h.registerCalls()).toBe(0);
+    });
+
+    it('POSITIVE CONTROL: the preload path DOES register when the fetch succeeds', async () => {
+        // Otherwise the assertion above is satisfied by a preloaded catalog that never
+        // registers anything, which would disable harvesting on the documented path.
+        const h = harness();
+        const catalog = await h.langsys.preloadCatalog('it');
+        const result = await h.langsys.run({ locale: 'it', catalog }, () => t('Genuinely new'));
+        await settleDrain();
+        await h.langsys.flush(result);
+
+        expect(result.missing.map((m) => m.phrase)).toEqual(['Genuinely new']);
+        expect(h.registerCalls()).toBe(1);
+    });
+
+    it('an explicit catalogAvailable:false wins over anything inferred', async () => {
+        // The escape hatch for a host that fetches its own catalog and knows the fetch
+        // failed. Without it such a host has no way to say so.
+        const h = harness();
+        const result = await h.langsys.run(
+            { locale: 'it', catalog: { __uncategorized__: {} }, catalogAvailable: false },
+            () => t('Should not register'),
+        );
+        await settleDrain();
+        expect(result.missing).toHaveLength(0);
+    });
+
     it('a caller-supplied catalog is NOT treated as a failed fetch', async () => {
         // run({ catalog }) skips the fetch entirely. That is an available catalog, so
         // misses against it are real misses and must still register.
@@ -565,6 +619,111 @@ describe('WIRE-4 clause 2 — a failed catalog fetch registers NOTHING', () => {
         );
         await settleDrain();
         expect(result.missing.map((m) => m.phrase)).toEqual(['Genuinely new']);
+    });
+});
+
+describe('REG-6 — the batch that was SENT is what gets marked, not the queue as it stands', () => {
+    /**
+     * Rowed `implemented` with no test until a review pointed out that a runtime rule
+     * graded on "the defect is unrepresentable" is graded above its evidence.
+     *
+     * **The first version of this test was worthless and a mutation proved it.** It called
+     * `run()` twice and asserted nothing was lost — but two `run()` calls are two separate
+     * scopes with two separate queues, so no drain of one could ever swallow a miss of the
+     * other. Marking the live queue post-await turned it 0 red. The rule is about ONE
+     * scope whose queue grows while its own send is in flight, and the only way to reach
+     * that from outside is to let the render start work that outlives it: AsyncLocalStorage
+     * propagates the scope into anything scheduled inside it, which is exactly the streamed
+     * -response tail this package supports.
+     *
+     * The failure prevented is silent and permanent: success handler re-reads the LIVE
+     * queue, marks everything in it registered and empties it, so a phrase recorded
+     * mid-request is marked done, discarded unsent, and never retried because it then
+     * reads as known.
+     */
+    it('does not lose a phrase recorded while that scope\'s own send is in flight', async () => {
+        const h = harness({ registerDelayMs: 60 });
+
+        let lateDone: () => void;
+        const late = new Promise<void>((r) => (lateDone = r));
+
+        const result = await h.langsys.run({ locale: 'it' }, () => {
+            t('Early');
+            // Scheduled INSIDE the scope, so ALS carries the scope with it. Fires while
+            // the drain triggered by `Early` is still awaiting its POST.
+            setTimeout(() => {
+                t('LateArrival');
+                lateDone();
+            }, 30);
+            return 'streamed';
+        });
+
+        await late;
+        await new Promise((r) => setTimeout(r, 200));
+        await h.langsys.flush(result);
+
+        const sent = h.registered.flat().map((i) => i.phrase);
+        expect(sent).toContain('Early');
+        expect(sent).toContain('LateArrival');
+    });
+
+    it('POSITIVE CONTROL: a phrase is sent exactly once, not duplicated by the guard', async () => {
+        // The opposite failure. A fix that re-sends the whole queue on every drain would
+        // satisfy "nothing is lost" while doubling every registration.
+        const h = harness();
+        const result = await h.langsys.run({ locale: 'it' }, () => {
+            t('Once');
+            t('Once');
+        });
+        await settleDrain();
+        await h.langsys.flush(result);
+        expect(h.registered.flat().filter((i) => i.phrase === 'Once')).toHaveLength(1);
+    });
+});
+
+describe('WIRE-4 clause 1 — the translation call must never throw', () => {
+    /**
+     * Checked in rather than left as a scratch measurement. The row cited a dead-port
+     * probe that existed only in a session transcript, and CONF-2 is explicit that
+     * evidence you cannot re-run is a memory, not a test.
+     *
+     * `127.0.0.1:1` is a real connection refusal, not a stubbed rejection — the failure
+     * arrives through the same path a DNS outage or a down API would take. On the server
+     * profile this is an availability coupling rather than a code-quality point: this
+     * package sits in the request path, so an unhandled rejection here turns a working
+     * page into a 500 for every visitor.
+     */
+    const deadPort = () =>
+        createLangsysServer({
+            projectId: 'p',
+            apiKey: 'k',
+            baseLocale: 'en',
+            apiUrl: 'http://127.0.0.1:1/api',
+        });
+
+    it('run() + t() degrade to source text instead of throwing', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const res = await deadPort().run({ locale: 'it' }, () => t('Hello'));
+        expect(res.value).toBe('Hello');
+    });
+
+    it('preloadCatalog() degrades instead of throwing', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        await expect(deadPort().preloadCatalog('it')).resolves.toBeDefined();
+    });
+
+    it('and clause 2 holds on the unreachable path too — nothing is queued', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const res = await deadPort().run({ locale: 'it' }, () => {
+            for (let i = 0; i < 10; i++) t(`Phrase ${i}`);
+        });
+        expect(res.missing).toHaveLength(0);
+    });
+
+    it('POSITIVE CONTROL: a reachable stub DOES translate, so degrading means something', async () => {
+        const h = harness();
+        const res = await h.langsys.run({ locale: 'it' }, () => t('Known'));
+        expect(res.value).toBe('Conosciuto');
     });
 });
 

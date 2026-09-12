@@ -67,6 +67,15 @@ export interface RequestScopeOptions {
     locale: string;
     /** Pre-fetched catalog, if the host already has one. Skips the fetch entirely. */
     catalog?: Catalog;
+    /**
+     * Whether `catalog` is a real answer (WIRE-4 clause 2).
+     *
+     * Inferred when omitted: a catalog from `preloadCatalog()` knows whether its own fetch
+     * failed, and a hand-built one is assumed good. Pass `false` explicitly when the host
+     * fetched the catalog itself and knows that fetch failed — without a catalog every
+     * phrase looks new, and registering them turns an outage into a write storm.
+     */
+    catalogAvailable?: boolean;
 }
 
 /** A phrase discovered during render that the catalog did not resolve. */

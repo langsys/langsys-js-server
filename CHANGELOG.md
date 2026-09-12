@@ -34,7 +34,14 @@ whose markup carries none of the listed constructs keep the ids they had.
 - **Registrations are chunked to the server's advertised batch limit** (REG-9).
   `langsys_settings.translatable_items.batch_limit` was never read and batches went out
   whole — 430 phrases in a single POST, which the server rejects outright.
-- **A failed catalog fetch no longer queues registrations** (WIRE-4 clause 2). Without a
+- **A failed catalog fetch no longer queues registrations, on BOTH paths** (WIRE-4
+  clause 2). The first version of this fix guarded only the fetch inside `run()`. The
+  documented integration shape — `preloadCatalog(locale)` then `run({ locale, catalog })`,
+  which is what `example/src/hooks.server.ts` does, because SvelteKit reads `event.locals`
+  during `resolve(event)` — bypassed it entirely and produced the identical pre-fix
+  numbers. `preloadCatalog()` now marks a failed result and `run()` honours the mark;
+  `run({ catalogAvailable: false })` is also accepted for a host that fetches its own.
+  Without a
   catalog a miss cannot be told from a hit, so the previous behaviour re-registered every
   phrase on the page — turning an API outage into a write storm against the same API,
   sized by how much copy the page carries. Measured before the fix: a 502 with 40 phrases

@@ -34,6 +34,13 @@ whose markup carries none of the listed constructs keep the ids they had.
 - **Registrations are chunked to the server's advertised batch limit** (REG-9).
   `langsys_settings.translatable_items.batch_limit` was never read and batches went out
   whole — 430 phrases in a single POST, which the server rejects outright.
+- **A failed catalog fetch no longer queues registrations** (WIRE-4 clause 2). Without a
+  catalog a miss cannot be told from a hit, so the previous behaviour re-registered every
+  phrase on the page — turning an API outage into a write storm against the same API,
+  sized by how much copy the page carries. Measured before the fix: a 502 with 40 phrases
+  rendered queued 40 and POSTed all of them. The render still degrades to source text, and
+  the failure is still logged. A genuinely empty catalog (a new project answering 200 with
+  no translations) is unaffected and still registers — that distinction is the whole fix.
 - **Locales go out lowercase** (WIRE-3). `0.1.0` sent `locale=de-DE` and cached under
   `langsys:catalog:es-CR`; the contract is `de-de`. Came in with the `/pure` swap.
 

@@ -232,16 +232,31 @@ export class LangsysServer {
 
         await this.ensureAuthorized();
 
-        const catalog = options.catalog
-            ? normalizeCatalog(options.catalog)
-            : locale === this.baseLocale
-              ? // The base locale has no catalog to fetch: phrases are already written in
-                // it. Fetching would be a round-trip for an empty result. Still normalized,
-                // so `RenderResult.catalog` has the same shape on every path — a client SDK
-                // seeding from a base-locale render must not receive a differently-shaped
-                // object than one seeding from `/it`.
-                normalizeCatalog({})
-              : await this.catalogs.get(locale);
+        // `catalogAvailable` is tracked alongside the catalog itself, because an empty
+        // catalog means two opposite things and they are indistinguishable by shape: a
+        // project with nothing to translate, or a fetch that failed. WIRE-4 clause 2 turns
+        // on telling them apart — without a catalog a miss cannot be distinguished from a
+        // hit, so registering on the failed path re-registers the whole page.
+        //
+        // A caller-supplied catalog and the base locale both count as AVAILABLE. The first
+        // is an answer the host already had; the second needs no fetch, and never queues
+        // anyway because a base-locale miss is not a miss.
+        let catalog: Catalog;
+        let catalogAvailable = true;
+        if (options.catalog) {
+            catalog = normalizeCatalog(options.catalog);
+        } else if (locale === this.baseLocale) {
+            // The base locale has no catalog to fetch: phrases are already written in it.
+            // Fetching would be a round-trip for an empty result. Still normalized, so
+            // `RenderResult.catalog` has the same shape on every path — a client SDK
+            // seeding from a base-locale render must not receive a differently-shaped
+            // object than one seeding from `/it`.
+            catalog = normalizeCatalog({});
+        } else {
+            const resolved = await this.catalogs.get(locale);
+            catalog = resolved.catalog;
+            catalogAvailable = resolved.ok;
+        }
 
         const scope: RequestScope = {
             locale,
@@ -256,6 +271,7 @@ export class LangsysServer {
             // staler one authorize() left behind.
             writeEnabled: this.writeEnabled,
             keyType: this.keyType,
+            catalogAvailable,
             batchLimit: this.batchLimit,
             drained: false,
             draining: false,
@@ -320,7 +336,10 @@ export class LangsysServer {
     async preloadCatalog(locale: string): Promise<Catalog> {
         const canonical = canonicalizeLocale(locale);
         if (canonical === this.baseLocale) return normalizeCatalog({});
-        return this.catalogs.get(canonical);
+        // Public API returns the catalog alone. A caller pre-loading one and handing it to
+        // `run({ locale, catalog })` is declaring it authoritative, which is why that path
+        // counts as available: the host has taken responsibility for the answer.
+        return (await this.catalogs.get(canonical)).catalog;
     }
 
     /** Drop a locale's cached catalog across every worker sharing the configured cache. */

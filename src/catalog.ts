@@ -24,6 +24,19 @@ import { UNCATEGORIZED } from './constants.js';
 import type { Logger } from './logger.js';
 import type { Catalog, SharedCache } from './types.js';
 
+/**
+ * A catalog, plus whether it is a real answer.
+ *
+ * `ok: false` means the fetch failed and the catalog is empty as a DEGRADATION, not as a
+ * fact about the project. The two are indistinguishable by shape and must not be: without
+ * a catalog a miss cannot be told from a hit, so treating the empty one as authoritative
+ * re-registers every phrase on the page (WIRE-4 clause 2).
+ */
+export interface CatalogResult {
+    catalog: Catalog;
+    ok: boolean;
+}
+
 interface CachedRecord {
     /**
      * ABSOLUTE epoch milliseconds, stamped at WRITE time into the shared record.
@@ -71,7 +84,7 @@ export class CatalogStore {
      * miss the same key in the same tick. This is the one property of PHP's shared tier
      * deliberately NOT copied.
      */
-    private readonly inFlight = new Map<string, Promise<Catalog>>();
+    private readonly inFlight = new Map<string, Promise<CatalogResult>>();
 
     /**
      * Process-lived memo, used ONLY when no shared cache is configured.
@@ -128,7 +141,7 @@ export class CatalogStore {
         return `langsys:catalog:${this.api.projectId}:${canonicalizeLocale(locale)}`;
     }
 
-    async get(locale: string): Promise<Catalog> {
+    async get(locale: string): Promise<CatalogResult> {
         const key = this.key(locale);
         const now = Date.now();
 
@@ -160,7 +173,7 @@ export class CatalogStore {
                     // No clone needed here: JSON.parse already yields a fresh object per
                     // request, which is what makes this path immune to the aliasing the
                     // process-memo path has to defend against below.
-                    if (record.expiresAt > now) return record.catalog;
+                    if (record.expiresAt > now) return { catalog: record.catalog, ok: true };
                 } catch (err) {
                     // A corrupt record must not take the page down, but it must not be
                     // silent either — silent cache corruption presents as "translations
@@ -170,7 +183,7 @@ export class CatalogStore {
             }
         } else {
             const record = this.processMemo.get(key);
-            if (record && record.expiresAt > now) return cloneCatalog(record.catalog);
+            if (record && record.expiresAt > now) return { catalog: cloneCatalog(record.catalog), ok: true };
 
             this.logger.warnOnce('no-shared-cache',
                 'No shared cache is configured, so each worker holds an independent catalog. ' +
@@ -183,7 +196,10 @@ export class CatalogStore {
 
         // Single-flight: coalesce concurrent misses for the same key.
         const existing = this.inFlight.get(key);
-        if (existing) return cloneCatalog(await existing);
+        if (existing) {
+            const settled = await existing;
+            return { catalog: cloneCatalog(settled.catalog), ok: settled.ok };
+        }
 
         // Stamp the generation this fetch started in. `invalidate()` bumps it, so a fetch
         // already on the wire when an invalidation lands is not allowed to write its
@@ -197,10 +213,11 @@ export class CatalogStore {
             .finally(() => this.inFlight.delete(key));
 
         this.inFlight.set(key, promise);
-        return cloneCatalog(await promise);
+        const settled = await promise;
+        return { catalog: cloneCatalog(settled.catalog), ok: settled.ok };
     }
 
-    private async fetchAndStore(locale: string, key: string, generation: number): Promise<Catalog> {
+    private async fetchAndStore(locale: string, key: string, generation: number): Promise<CatalogResult> {
         let catalog: Catalog = {};
         try {
             const response = await this.api.getTranslations(locale);
@@ -218,11 +235,11 @@ export class CatalogStore {
                 // fetch means the whole page renders base language, which is the exact
                 // defect this package exists to correct. It must produce a signal.
                 this.logger.error(`Catalog fetch for "${locale}" failed`, response.errors);
-                return {};
+                return { catalog: {}, ok: false };
             }
         } catch (err) {
             this.logger.error(`Catalog fetch for "${locale}" threw`, err);
-            return {};
+            return { catalog: {}, ok: false };
         }
 
         // An invalidation landed while this fetch was on the wire. The result is
@@ -232,7 +249,7 @@ export class CatalogStore {
             this.logger.log(
                 `Discarding cache write for "${locale}": invalidated while the fetch was in flight.`,
             );
-            return catalog;
+            return { catalog, ok: true };
         }
 
         const record: CachedRecord = {
@@ -251,7 +268,7 @@ export class CatalogStore {
             this.logger.error(`Could not cache catalog for "${locale}"`, err);
         }
 
-        return catalog;
+        return { catalog, ok: true };
     }
 
     /**

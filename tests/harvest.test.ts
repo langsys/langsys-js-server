@@ -45,6 +45,8 @@ function harness(
         batchLimit?: unknown;
         /** A shared cache, so a second instance can be served a catalog off the cache. */
         cache?: SharedCache;
+        /** Make GET /translations fail, so the catalog is unavailable for the render. */
+        catalogFails?: boolean;
     } = {},
 ) {
     const registered: Registered[][] = [];
@@ -83,6 +85,10 @@ function harness(
                 status: 200,
                 headers: { 'content-type': 'application/json' },
             });
+        }
+
+        if (opts.catalogFails) {
+            return new Response('gateway blew up', { status: 502, statusText: 'Bad Gateway' });
         }
 
         const envelope: Record<string, unknown> = {
@@ -488,6 +494,77 @@ describe('REG-9 — batch to the server-provided limit, on every path', () => {
         });
         await h.langsys.flush(result);
         expect(sizes(h)).toEqual([4, 4, 1]);
+    });
+});
+
+describe('WIRE-4 clause 2 — a failed catalog fetch registers NOTHING', () => {
+    /**
+     * Without a catalog, a miss is indistinguishable from a hit. Treating the failure as
+     * "everything is unknown" re-registers phrases that already exist, so **every outage
+     * becomes a write storm** — on exactly the paths that were already failing, and
+     * proportional to how much copy the page has.
+     *
+     * Measured before the fix: a 502 on /translations with 40 phrases rendered produced 40
+     * queued and one POST of 40 items. The render degrading to source text is correct and
+     * was already true; the registrations were the defect.
+     *
+     * "Degrade gracefully" alone does not settle this, which is why the spec says it
+     * outright: the intuitive answer is the wrong one.
+     */
+    const render40 = async (h: ReturnType<typeof harness>) => {
+        const result = await h.langsys.run({ locale: 'it' }, () => {
+            for (let i = 0; i < 40; i++) t(`Phrase ${i}`);
+            return 'done';
+        });
+        await settleDrain();
+        await h.langsys.flush(result);
+        return result;
+    };
+
+    it('queues nothing and sends nothing when the catalog fetch fails', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const h = harness({ catalogFails: true });
+        const result = await render40(h);
+
+        expect(result.missing).toHaveLength(0);
+        expect(h.registerCalls()).toBe(0);
+    });
+
+    it('still renders source text — degrading is not the same as failing', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        const h = harness({ catalogFails: true });
+        const res = await h.langsys.run({ locale: 'it' }, () => t('Hello'));
+        expect(res.value).toBe('Hello');
+    });
+
+    it('POSITIVE CONTROL: the same 40 phrases DO register when the catalog loads', async () => {
+        // Without this, "registers nothing" is satisfied by a build that never registers
+        // anything at all — which would pass while silently disabling harvesting.
+        const h = harness();
+        await render40(h);
+        expect(h.registerCalls()).toBeGreaterThan(0);
+        expect(h.registered.flat()).toHaveLength(40);
+    });
+
+    it('is not silent — a failed catalog still reports', async () => {
+        // The failure must remain loud. A page rendering base language looks identical to
+        // a working one in any curl-shaped check, so the log is the only signal.
+        const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const h = harness({ catalogFails: true });
+        await h.langsys.run({ locale: 'it' }, () => t('Hello'));
+        expect(err.mock.calls.map((c) => c.join(' ')).some((m) => m.includes('Catalog fetch'))).toBe(true);
+    });
+
+    it('a caller-supplied catalog is NOT treated as a failed fetch', async () => {
+        // run({ catalog }) skips the fetch entirely. That is an available catalog, so
+        // misses against it are real misses and must still register.
+        const h = harness();
+        const result = await h.langsys.run(
+            { locale: 'it', catalog: { __uncategorized__: { Known: 'Conosciuto' } } },
+            () => t('Genuinely new'),
+        );
+        await settleDrain();
+        expect(result.missing.map((m) => m.phrase)).toEqual(['Genuinely new']);
     });
 });
 

@@ -99,7 +99,8 @@ export const t: TFunction = (
     // a miss that can never be discovered because nothing reports it.
     const known = bucket !== undefined && Object.prototype.hasOwnProperty.call(bucket, phrase);
 
-    if (!known && scope.locale !== scope.baseLocale) {
+    // WIRE-4 clause 2: with no catalog, "absent" means "unknowable", not "missing".
+    if (!known && scope.catalogAvailable && scope.locale !== scope.baseLocale) {
         // A miss in the BASE locale is not a miss — the phrase is already in the base
         // language and there is nothing to look up. Queueing those would register every
         // phrase on every base-locale render.

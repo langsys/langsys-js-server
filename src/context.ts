@@ -53,6 +53,16 @@ export interface RequestScope {
     /** Captured alongside `writeEnabled`, and used ONLY for GATE-8's bounded fallback. */
     keyType: KeyType;
     /**
+     * False when this request's catalog could not be fetched (WIRE-4 clause 2).
+     *
+     * The render still degrades to source text — that part was always right. What this
+     * gates is REGISTRATION: with no catalog, every phrase looks like a miss, so queueing
+     * them turns an API outage into a write storm against the same API, sized by how much
+     * copy the page has. Degrading and recording nothing is the specified behaviour, and
+     * the intuitive alternative is the wrong one.
+     */
+    catalogAvailable: boolean;
+    /**
      * The server's registration batch cap for this request (REG-9).
      *
      * Captured per request for the same reason as the capability: the drain runs after

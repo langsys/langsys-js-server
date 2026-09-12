@@ -104,7 +104,7 @@ describe('the harness itself', () => {
     it('fetches and returns a catalog, or nothing below means anything', async () => {
         const { api, fetches } = makeApi();
         const store = new CatalogStore(api, logger(), 300);
-        expect(await store.get('it')).toEqual(NORMALIZED);
+        expect((await store.get('it')).catalog).toEqual(NORMALIZED);
         expect(fetches).toHaveLength(1);
     });
 });
@@ -132,7 +132,7 @@ describe('CACHE-1 — keys are namespaced by project', () => {
         const storeB = new CatalogStore(b.api, logger(), 300, shared.cache);
 
         await storeA.get('it');
-        const fromB = await storeB.get('it');
+        const fromB = (await storeB.get('it')).catalog;
 
         // Both halves matter. The value assertion is the user-visible harm; the fetch
         // assertion is what proves B actually went to the API rather than being handed a
@@ -160,7 +160,7 @@ describe('CACHE-1 — keys are namespaced by project', () => {
         const store = new CatalogStore(api, logger(), 300, shared.cache);
 
         await store.get('it');
-        const second = await store.get('it');
+        const second = (await store.get('it')).catalog;
 
         expect(second).toEqual(normalizeCatalog(ALPHA));
         expect(fetches).toHaveLength(1);
@@ -175,8 +175,8 @@ describe('CACHE-1 — keys are namespaced by project', () => {
 
         // B first this time: a fix that only namespaces on write would pass one order
         // and fail the other.
-        expect(await storeB.get('it')).toEqual(normalizeCatalog(BETA));
-        expect(await storeA.get('it')).toEqual(normalizeCatalog(ALPHA));
+        expect((await storeB.get('it')).catalog).toEqual(normalizeCatalog(BETA));
+        expect((await storeA.get('it')).catalog).toEqual(normalizeCatalog(ALPHA));
         expect(shared.store.size).toBe(2);
     });
 
@@ -311,7 +311,7 @@ describe('the shared tier is the ONLY cross-request tier', () => {
             }),
         );
 
-        const got = await store.get('it');
+        const got = (await store.get('it')).catalog;
         expect(got.__uncategorized__.Hello).toBe('UPDATED');
     });
 });
@@ -327,7 +327,7 @@ describe('a broken cache adapter must not take the site down', () => {
         const { api, fetches } = makeApi();
         const store = new CatalogStore(api, logger(), 300, shared.cache);
 
-        await expect(store.get('it')).resolves.toEqual(NORMALIZED);
+        expect((await store.get('it')).catalog).toEqual(NORMALIZED);
         expect(fetches).toHaveLength(1);
         expect(console.error).toHaveBeenCalled();
     });
@@ -338,7 +338,7 @@ describe('a broken cache adapter must not take the site down', () => {
         const { api } = makeApi();
         const store = new CatalogStore(api, logger(), 300, shared.cache);
 
-        await expect(store.get('it')).resolves.toEqual(NORMALIZED);
+        expect((await store.get('it')).catalog).toEqual(NORMALIZED);
         expect(console.error).toHaveBeenCalled();
     });
 
@@ -362,7 +362,7 @@ describe('a broken cache adapter must not take the site down', () => {
         const [key] = [...shared.store.keys()];
         shared.store.set(key, 'not json');
 
-        await expect(store.get('it')).resolves.toEqual(NORMALIZED);
+        expect((await store.get('it')).catalog).toEqual(NORMALIZED);
         expect(fetches).toHaveLength(2);
         expect(console.error).toHaveBeenCalled();
     });
@@ -377,8 +377,8 @@ describe('a failed fetch is not cached and is not silent', () => {
         const { api, fetches } = makeApi({ status: false, catalog: {} });
         const store = new CatalogStore(api, logger(), 300);
 
-        expect(await store.get('it')).toEqual({});
-        expect(await store.get('it')).toEqual({});
+        expect((await store.get('it')).catalog).toEqual({});
+        expect((await store.get('it')).catalog).toEqual({});
         expect(fetches, 'a failed fetch must not be memoized as a valid catalog').toHaveLength(2);
         expect(console.error).toHaveBeenCalled();
     });
@@ -387,7 +387,7 @@ describe('a failed fetch is not cached and is not silent', () => {
         const { api } = makeApi({ throws: true });
         const store = new CatalogStore(api, logger(), 300);
 
-        expect(await store.get('it')).toEqual({});
+        expect((await store.get('it')).catalog).toEqual({});
         expect(console.error).toHaveBeenCalled();
     });
 });
@@ -398,7 +398,8 @@ describe('single-flight', () => {
         const { api, fetches } = makeApi({ delayMs: 30 });
         const store = new CatalogStore(api, logger(), 300);
 
-        const results = await Promise.all(Array.from({ length: 25 }, () => store.get('it')));
+        const settled = await Promise.all(Array.from({ length: 25 }, () => store.get('it')));
+        const results = settled.map((r) => r.catalog);
 
         expect(fetches).toHaveLength(1);
         for (const r of results) expect(r).toEqual(NORMALIZED);
@@ -421,24 +422,69 @@ describe('every caller gets its own catalog object', () => {
         const { api } = makeApi();
         const store = new CatalogStore(api, logger(), 300);
 
-        const first = await store.get('it');
-        const second = await store.get('it');
+        const first = (await store.get('it')).catalog;
+        const second = (await store.get('it')).catalog;
         expect(first).not.toBe(second);
 
         (first.__uncategorized__ as Record<string, string>).Hello = 'MUTATED';
 
-        const third = await store.get('it');
+        const third = (await store.get('it')).catalog;
         expect(third.__uncategorized__.Hello).toBe('Ciao');
     });
 
     it('does not alias between concurrent single-flight callers either', async () => {
         const { api } = makeApi({ delayMs: 20 });
         const store = new CatalogStore(api, logger(), 300);
-        const [a, b] = await Promise.all([store.get('it'), store.get('it')]);
+        const [ra, rb] = await Promise.all([store.get('it'), store.get('it')]);
+        const a = ra.catalog;
+        const b = rb.catalog;
 
         expect(a).not.toBe(b);
         (a.__uncategorized__ as Record<string, string>).Hello = 'MUTATED';
         expect(b.__uncategorized__.Hello).toBe('Ciao');
+    });
+});
+
+// ---------------------------------------------------------------------------
+describe('the ok flag distinguishes empty-because-failed from empty-because-empty', () => {
+    /**
+     * An empty catalog means two opposite things and they are identical by shape: a
+     * project with nothing to translate, or a fetch that failed. WIRE-4 clause 2 turns on
+     * telling them apart — `t()` may only register a miss when the catalog is a real
+     * answer, because otherwise every phrase on the page looks new and an outage becomes
+     * a write storm against the API that is already failing.
+     */
+    it('reports ok:false when the fetch fails', async () => {
+        const { api } = makeApi({ status: false });
+        expect((await new CatalogStore(api, logger(), 300).get('it')).ok).toBe(false);
+    });
+
+    it('reports ok:false when the fetch throws', async () => {
+        const { api } = makeApi({ throws: true });
+        expect((await new CatalogStore(api, logger(), 300).get('it')).ok).toBe(false);
+    });
+
+    it('reports ok:true for a GENUINELY EMPTY catalog — the case that must not be confused', async () => {
+        // The discriminating vector. A project with no translations yet answers 200 with
+        // an empty body; that is an answer, and its misses are real misses that must
+        // still register. Conflating it with a failure would silently disable harvesting
+        // for exactly the projects that need it most — brand new ones.
+        const { api } = makeApi({ catalog: {} });
+        const result = await new CatalogStore(api, logger(), 300).get('it');
+        expect(result.ok).toBe(true);
+        expect(result.catalog).toEqual(normalizeCatalog({}));
+    });
+
+    it('reports ok:true from the cache and from the process memo', async () => {
+        const shared = makeSharedCache();
+        const { api } = makeApi();
+        const store = new CatalogStore(api, logger(), 300, shared.cache);
+        await store.get('it');
+        expect((await store.get('it')).ok).toBe(true);
+
+        const memo = new CatalogStore(makeApi().api, logger(), 300);
+        await memo.get('it');
+        expect((await memo.get('it')).ok).toBe(true);
     });
 });
 

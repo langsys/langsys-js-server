@@ -57,6 +57,11 @@ double, so the grade is `n/a (pure)` and the evidence is an execution against a 
 authored in another lane. Those are the strongest rows here and the only ones claiming
 `implemented`.
 
+**WIRE-4 clause 2 was this file's top-ranked gap and is now closed** — it was fixed as item
+0 of 0.2.0 rather than left to rank. A failed catalog fetch used to queue every phrase on
+the page, so an API outage became a write storm against the same API. The row below carries
+the mutations.
+
 **What surfaced while writing this file.** Three things, in descending order of how much
 they cost:
 
@@ -144,7 +149,7 @@ is ever added, this carve-out is void and the decision must move fully per-reque
 | WIRE-1 | provisional | mock | `api` "request headers" — `x-Authorization` asserted on every request, plus `X-Langsys-Capabilities: icu` (whose absence silently downgrades every plural) |
 | WIRE-2 | provisional | mock | `api` "non-200 responses" — a 422 carrying valid JSON is separated from a 500 with a non-JSON body, so the `ok` check cannot pass for the wrong reason |
 | WIRE-3 | implemented | n/a (pure) | `api` "WIRE-3: sends lowercase xx-yy on the wire" plus a second assertion that four spellings of one locale collapse to one wire form. Resolved by construction on the `/pure` re-parent; `0.1.0` shipped the cased form |
-| WIRE-4 | provisional | mock | Measured against a **dead port** (`127.0.0.1:1`, real connection refusal): `run()`+`t()` and `preloadCatalog()` both degrade without throwing, with a live-stub positive control. **Clause 2 is a gap** — a failed catalog fetch still queues registrations |
+| WIRE-4 | provisional | mock | **Clause 1** measured against a **dead port** (`127.0.0.1:1`, real connection refusal): `run()`+`t()` and `preloadCatalog()` both degrade without throwing, with a live-stub positive control. **Clause 2** now met: `CatalogStore.get()` returns `{catalog, ok}` and `t()` registers only when `ok`, so a failed fetch degrades to source and records nothing. The discriminating case is a GENUINELY EMPTY catalog — a brand-new project answering 200 with no translations — which reports `ok: true` and must still register, or the fix would silently disable harvesting for exactly the projects that need it. Mutations: ignore `catalogAvailable` → 1 red; force it false → 2 red; a failed fetch reporting `ok: true` → 1 red |
 | WIRE-5 | provisional | mock | `api` "URL construction" — `apiUrl` is constructor-injected and redirectable to a double; trailing slashes stripped; the default host asserted |
 | CONF-1 | **not met** | n/a | Transport assertions here inspect a `fetch` stub, which is what CONF-1 forbids as sole evidence. Honest status pending the shared contract fixture |
 | CONF-2 | implemented | n/a | Every row above carries a grade, and `mock` rows record `provisional` rather than `implemented` |
@@ -154,22 +159,17 @@ is ever added, this carve-out is void and the decision must move fully per-reque
 
 ## Gaps, ranked by cost
 
-1. **WIRE-4 clause 2 — a failed catalog fetch queues registrations.** Measured: a 502 on
-   `/translations` with 40 phrases rendered produced 40 queued and 1 POST of 40 items.
-   Without a catalog a miss is indistinguishable from a hit, so an outage becomes a write
-   storm on exactly the paths already failing. Highest cost here because it fires during an
-   incident and makes it worse.
-2. **MARK-1 — nothing emits a marker.** Server-rendered hosts carry no resolved id, so the
+1. **MARK-1 — nothing emits a marker.** Server-rendered hosts carry no resolved id, so the
    client-DOM parity probe cannot key on anything and `auditRenderedHtml` reports clean on
    a page it cannot see into. 0.2.0.
-3. **SRV-5 — no component child capture.** 0.2.0, and the piece the roadmap calls the real
+2. **SRV-5 — no component child capture.** 0.2.0, and the piece the roadmap calls the real
    next work.
-4. **REG-8 — no retry or backoff.** A failed batch is consumed and dropped.
-5. **REG-11 — no ellipsis warning.** Nothing implemented.
-6. **SRV-4 round-trip untested.** Blocked on the core's synchronous seed.
-7. **GATE-2, GATE-3, CID-4, ICU-4, REG-12 have no test pointing at them.** Each is
+3. **REG-8 — no retry or backoff.** A failed batch is consumed and dropped.
+4. **REG-11 — no ellipsis warning.** Nothing implemented.
+5. **SRV-4 round-trip untested.** Blocked on the core's synchronous seed.
+6. **GATE-2, GATE-3, CID-4, ICU-4, REG-12 have no test pointing at them.** Each is
    defensible by reading the code, which is exactly the row CONF-1 says to distrust.
-8. **CONF-1 unmet fleet-wide** — the shared contract fixture does not exist, which caps
+7. **CONF-1 unmet fleet-wide** — the shared contract fixture does not exist, which caps
    every transport row at `provisional`.
 
 ## Release-wave preconditions

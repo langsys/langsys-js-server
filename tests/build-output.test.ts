@@ -53,56 +53,53 @@ describe.skipIf(!built)('built artifact', () => {
     it('does not bundle the base SDK singleton graph', () => {
         /**
          * The whole reason this package consumes `langsys-js-typescript/pure` rather than
-         * the core's main entry: importing the main entry instantiates LangsysApp,
-         * Translations, the shared miss queue and the shared auth header at module scope —
-         * module-global state inside a server process, which is the one thing this package
-         * exists to avoid.
+         * the core's main entry: the main entry instantiates LangsysApp, Translations, the
+         * shared miss queue and the shared auth header at module scope — module-global
+         * state inside a server process, which is the one thing this package exists to
+         * avoid.
          *
-         * **The probe shape is the load-bearing part, not the name list.** An earlier
-         * version of this test asserted only that `dist` carried no bare
-         * `from 'langsys-js-typescript'` import. That assertion **cannot fail**: the core
-         * is a devDependency, so tsup treats it as internal and BUNDLES it — a real import
-         * of the singleton graph produces no import statement at all, just 64KB of inlined
-         * module-scope state. Measured: adding `import { LangsysApp } from
-         * 'langsys-js-typescript'` to `src/index.ts` left the import assertion green while
-         * `dist/index.mjs` went from 51,901 to 116,302 bytes and gained 37 singleton
-         * markers.
+         * **Third version of this check. The first two could not do their job.**
          *
-         * So this greps for the graph's own symbols in the OUTPUT, which is what actually
-         * ships. The TypeScript lane found the same class of hole in their DOM guard the
-         * same day — a trap keyed on names the code never touched — and the lesson
-         * generalises: check what the probe can observe, not how long its list is.
+         * v1 asserted no bare `from 'langsys-js-typescript'` import. That cannot fail: the
+         * core is a devDependency, so tsup inlines it and a real import produces no import
+         * statement at all. Measured — 51,901 → 116,302 bytes with the assertion green.
+         *
+         * v2 greped for IDENTIFIERS (`LangsysAppAPI`, `sTranslations`) with a control that
+         * those names exist in the core's published artifact. The TS lane found both holes:
+         * minifiers mangle internal identifiers, so a fully-inlined graph can grep clean;
+         * and a control reading the CORE's artifact checks their build, not ours, so it is
+         * blind to anything this repo's bundler does.
+         *
+         * v3 uses STRING LITERALS, whose contents no minifier rewrites, chosen because the
+         * graph pulls them unconditionally through `LangsysApp` — a marker from a corner the
+         * entry never reaches would be absent for a reason unrelated to the property, which
+         * is a pass proving nothing. `_dev_/singleton-guard.sh` establishes that these
+         * markers DO appear by building a mutant through this repo's own config; it is not
+         * asserted from the core's artifact here, because that was the v2 mistake.
          */
         const esm = readFileSync(distEsm, 'utf8');
 
-        // Still asserted, for the case where the core becomes a runtime dependency and is
-        // therefore external. It is not sufficient on its own — see above.
+        // Still asserted, for the day the core becomes a runtime dependency and external.
+        // Not sufficient alone — see above.
         expect(esm).not.toMatch(/from ['"]langsys-js-typescript['"]/);
 
-        // The part that can actually fail today.
         const SINGLETON_MARKERS = [
-            'LangsysAppAPI',
-            'sTranslations',
-            'LangsysAppClass',
-            'registerContentBlock',
-            'setWriteGrant',
+            'LangsysAppAPI Error:',
+            'langsys:translations',
+            'discovery/hint',
+            'X-Write-Grant',
+            '__langsys_probe__',
         ];
         for (const marker of SINGLETON_MARKERS) {
             expect(esm, `dist contains "${marker}" — the singleton graph is bundled`).not.toContain(
                 marker,
             );
         }
-    });
 
-    it('POSITIVE CONTROL: those markers really do exist in the core main entry', () => {
-        // Without this the assertion above passes against a marker list of names nobody
-        // ever emits — which is precisely the hole it was written to close, one level up.
-        const core = readFileSync(
-            new URL('../node_modules/langsys-js-typescript/dist/index.mjs', import.meta.url),
-            'utf8',
-        );
-        expect(core).toContain('LangsysAppAPI');
-        expect(core).toContain('sTranslations');
+        // Second, mangling-proof and tree-shake-proof signal. Deliberately a ceiling rather
+        // than a pin: brittle across dependency bumps, useful as corroboration. Bundling the
+        // graph roughly doubles this bundle (51,850 → 116,251 measured).
+        expect(esm.length).toBeLessThan(80_000);
     });
 
     it('declares no module-level mutable catalog state', () => {

@@ -43,6 +43,7 @@ export {
     CONTENT_BLOCK_MARKER_EMIT,
 } from './constants.js';
 export { normalizeCatalog } from './catalog.js';
+export { encodePhrase, type EncodedPhrase } from './phrase.js';
 export {
     renderTranslateBlock,
     stampContentBlock,

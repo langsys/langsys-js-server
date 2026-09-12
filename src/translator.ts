@@ -15,8 +15,7 @@
 import { getScope, NO_SCOPE_MESSAGE } from './context.js';
 import { queueMiss } from './harvest.js';
 import { UNCATEGORIZED } from './constants.js';
-import { interpolate } from 'langsys-js-typescript/pure';
-import { findUnusedParamKeys } from './params.js';
+import { findUnusedParamKeys, interpolate } from 'langsys-js-typescript/pure';
 import { warnOnceGlobal, type Logger } from './logger.js';
 import type { TranslateParams } from './types.js';
 

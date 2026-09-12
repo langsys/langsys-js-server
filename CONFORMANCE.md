@@ -13,7 +13,7 @@
 
 <!-- SUMMARY:START -->
 ```
-79 rules across 16 families, in 59 table rows
+79 rules across 16 families, in 59 table rows — each id exactly once
 53 bind all/server · 26 are another profile's
 
 By profile:
@@ -89,11 +89,16 @@ they cost:
    it is now a gap rather than a row.
 2. **REG-11 has no implementation at all.** No ellipsis warning exists. It is a `all`-profile
    rule and this package silently had nothing behind it.
-3. **GATE-6 and GATE-7 are satisfied vacuously**, and saying so is the point. Both govern
-   the relationship between the register lane and the report lane. HINT-2 means this SDK
-   has no report lane, so "mutually exclusive" and "every path feeds exactly one lane" hold
-   because one of the two lanes does not exist. A green row that cannot fail is what
-   CONF-1 exists to distrust, so they are marked `n/a (vacuous)` rather than `implemented`.
+3. **GATE-6 and GATE-7 both govern the register lane's relationship to the report lane,
+   and HINT-2 means this SDK has only one of those lanes.** The first draft of this file
+   rowed both `n/a (vacuous)` on that basis. That was wrong twice, and the corrections are
+   in their rows: GATE-6 has a half that genuinely binds and is tested — a non-write-enabled
+   session must not ATTEMPT to register — which a whole-rule `n/a` hid behind the
+   untestable half; and GATE-7's stated reason was false, because for a read-only session
+   no path feeds *either* lane, which is the rule's invisible-path case rather than a
+   satisfied one. `n/a (vacuous)` is retired as a status: it was neither of the two kinds
+   the spec recognises (profile, or architecture), and it let a binding rule read as
+   excluded.
 
 **GATE-3 carve-out, declared here because GATE-3 requires it to be declared.** This SDK
 holds `write_enabled` on the server instance across requests, and copies it into each

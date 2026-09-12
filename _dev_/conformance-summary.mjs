@@ -67,6 +67,27 @@ if (rows.length === 0) {
     process.exit(2);
 }
 
+/**
+ * Every rule appears exactly once.
+ *
+ * The count alone proves the id SET matches the spec's, not that each id appears once — a
+ * duplicated row and a missing family cancel out and the total still reads 79. The review
+ * that found this also found the arithmetic claim behind it was wrong (no family has seven
+ * rules, so a missing one gives 71 or 73, not 72). Both are fixed by checking uniqueness
+ * directly rather than inferring it from a total.
+ */
+const seen = new Map();
+const duplicates = [];
+for (const r of rows) {
+    if (seen.has(r.id)) duplicates.push(`${r.id} (rows "${seen.get(r.id)}" and "${r.row}")`);
+    else seen.set(r.id, r.row);
+}
+if (duplicates.length) {
+    console.error('Duplicate rule ids in CONFORMANCE.md — the totals below would be meaningless:');
+    for (const d of duplicates) console.error(`  ${d}`);
+    process.exit(2);
+}
+
 const tally = (key) =>
     rows.reduce((acc, r) => ((acc[r[key]] = (acc[r[key]] ?? 0) + 1), acc), /** @type {Record<string, number>} */ ({}));
 
@@ -90,7 +111,7 @@ const byEvidence = binding.reduce((acc, r) => ((acc[r.evidence] = (acc[r.evidenc
 
 
 const lines = [
-    `${rows.length} rules across ${families.size} families, in ${rowCount} table rows`,
+    `${rows.length} rules across ${families.size} families, in ${rowCount} table rows — each id exactly once`,
     `${binding.length} bind all/server · ${rows.length - binding.length} are another profile's`,
     '',
     'By profile:',

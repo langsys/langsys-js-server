@@ -39,8 +39,17 @@ export {
     PHRASE_MARKER_ATTRS_EMIT,
     SKIP_ELEMENTS,
     UNCATEGORIZED,
+    CONTENT_BLOCK_MARKER_ATTRS,
+    CONTENT_BLOCK_MARKER_EMIT,
 } from './constants.js';
 export { normalizeCatalog } from './catalog.js';
+export {
+    renderTranslateBlock,
+    stampContentBlock,
+    blockId,
+    UncapturableChildError,
+    type RenderedBlock,
+} from './blocks.js';
 export { auditRenderedHtml, type AuditFinding, type AuditResult, type AuditOptions } from './audit.js';
 export type { Logger } from './logger.js';
 export type {

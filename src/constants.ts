@@ -148,6 +148,18 @@ export const PHRASE_MARKER_ATTRS_EMIT = ['data-langsys-phrase', 'data-ls-phrase'
  */
 export { NON_TRANSLATABLE_ELEMENTS as SKIP_ELEMENTS } from 'langsys-js-typescript/pure';
 
+/**
+ * Content-block markers, re-exported from the core so the two spellings cannot drift.
+ *
+ * READ accepts both (MARK-2); EMIT writes one. That asymmetry is the point: a PHP page
+ * hosting a JS-rendered component is the ordinary case, and a reader that knows only one
+ * spelling re-splits the other's blocks into new ids.
+ */
+export { CONTENT_BLOCK_MARKER_ATTRS } from 'langsys-js-typescript/pure';
+
+/** The spelling this package writes (MARK-1). */
+export const CONTENT_BLOCK_MARKER_EMIT = 'data-ls-contentblock';
+
 /*
  * Consumed from the core rather than restated, for the same reason as the attribute
  * list: it decides identity, and a second copy fails as a silent re-key.

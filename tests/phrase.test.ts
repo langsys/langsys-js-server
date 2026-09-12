@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { parseFragment, serialize } from 'parse5';
 import { encodePhrase } from '../src/phrase.js';
 
 /** Measured by the core lane on the pre-refactor encoder. Do not recompute. */
@@ -95,6 +96,72 @@ describe('comments and excluded elements contribute nothing AND consume no index
         // elements and returns bare text.
         expect(encodePhrase('<p>Keep</p>').slots).toHaveLength(1);
         expect(encodePhrase('Keep').slots).toHaveLength(0);
+    });
+});
+
+describe('the three families where parse models actually disagree', () => {
+    /**
+     * **Why this block exists.** The golden set above was measured by the core lane in
+     * happy-dom; this adapter runs parse5; neither is a browser. On this exact axis the
+     * fleet already has precedent for the models disagreeing — the `<noscript>` reversal,
+     * where Chromium and parse5 make the body raw text while happy-dom and libxml2 make it
+     * markup, producing different ids for identical source.
+     *
+     * The core lane audited their 22 inputs and found none of them exercises a
+     * divergence-prone construct: all text, comments and inline elements. So the golden
+     * set's agreement is real but its COVERAGE stops at inline content, and they filed the
+     * rest as a known gap needing a Chromium run neither CI has.
+     *
+     * This lane has one. Measured in **headless Chromium 153.0.8010.12** via Playwright,
+     * injecting the core's browser bundle and calling its DOM-bound `encodeRichText`
+     * against this adapter's parse5 output, over the three families:
+     *
+     *   raw-text elements   textarea, title
+     *   foster parenting    non-table content inside <table>
+     *   implied close       <p> after <p>, bare <li>, bare <option>
+     *
+     * **9 of 9 agreed, including two inline controls.** The expectations below are those
+     * measured values, pasted as literals.
+     *
+     * Three controls ran, because an all-agree result is exactly what a broken harness
+     * produces: both sides returned a real marker-bearing key rather than two empty
+     * strings; the comparison reported DIVERGE when fed different input on each side; and
+     * Chromium demonstrably performed the transformations — `<b>stray</b>` moved BEFORE
+     * the table, `<p>one<p>two` became two closed paragraphs. parse5 produced byte-identical
+     * shapes for both, so the agreement is structural (both implement HTML5 tree
+     * construction) rather than two hosts declining to transform.
+     *
+     * The parse5 shape assertions below are reproducible in CI. The Chromium half is not,
+     * and is recorded as provenance rather than re-run — the same posture the core lane
+     * took with the golden set.
+     */
+    const CHROMIUM_AGREED: [html: string, phrase: string][] = [
+        ['<p>Keep</p><textarea>a <b>b</b></textarea>', '{m0o}Keep{m0c}{m1o}a <b>b</b>{m1c}'],
+        ['<title>a <b>b</b></title><p>Keep</p>', '{m0o}a <b>b</b>{m0c}{m1o}Keep{m1c}'],
+        ['<table><b>stray</b><tr><td>cell</td></tr></table>', '{m0o}stray{m0c}{m1o}{m2o}{m3o}{m4o}cell{m4c}{m3c}{m2c}{m1c}'],
+        ['<table>loose text<tr><td>x</td></tr></table>', 'loose text{m0o}{m1o}{m2o}{m3o}x{m3c}{m2c}{m1c}{m0c}'],
+        ['<p>one<p>two', '{m0o}one{m0c}{m1o}two{m1c}'],
+        ['<ul><li>one<li>two</ul>', '{m0o}{m1o}one{m1c}{m2o}two{m2c}{m0c}'],
+        ['<select><option>one<option>two</select>', '{m0o}{m1o}one{m1c}{m2o}two{m2c}{m0c}'],
+    ];
+
+    it.each(CHROMIUM_AGREED)('%s', (html, phrase) => {
+        expect(encodePhrase(html).phrase).toBe(phrase);
+    });
+
+    it('raw-text content stays raw — it is not parsed as markup', () => {
+        // The property that makes the textarea case interesting rather than incidental.
+        expect(encodePhrase('<p>Keep</p><textarea>a <b>b</b></textarea>').phrase).toContain('a <b>b</b>');
+    });
+
+    it('CONTROL: parse5 really does foster-parent and imply-close', () => {
+        // Without this, "the two models agree" is satisfiable by neither of them doing the
+        // transformation — agreement by shared inaction, which proves nothing about a
+        // third implementation that does.
+        expect(serialize(parseFragment('<table><b>stray</b><tr><td>cell</td></tr></table>'))).toBe(
+            '<b>stray</b><table><tbody><tr><td>cell</td></tr></tbody></table>',
+        );
+        expect(serialize(parseFragment('<p>one<p>two'))).toBe('<p>one</p><p>two</p>');
     });
 });
 

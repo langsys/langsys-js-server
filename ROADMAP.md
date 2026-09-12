@@ -206,6 +206,68 @@ aren't translated". A chain of fallbacks is also harder to retire than any link 
   the list. Same root cause as the `<noscript>` mistake this package made and corrected:
   **it pattern-matches as technical.**
 
+## RELEASE-WAVE PRECONDITION: the core dependency shape
+
+**Blocking any publish. Not a bug in the current tree — a decision that must be made
+before `0.2.0` leaves this machine.**
+
+Since the `/pure` re-parent, `langsys-js-typescript` is resolved through a **symlink** into
+a sibling checkout. That is the fleet convention for this phase and it is deliberate. It
+also means:
+
+**A clean checkout does not build.** `package.json` pins the core as a *devDependency* at
+`^0.6.5`, the lockfile resolves the registry tarball, and published `0.6.5` exposes only
+the `"."` condition — there is no `./pure`. Verified:
+
+```
+package.json   devDependencies: ^0.6.5   dependencies: (none)
+lockfile       https://registry.npmjs.org/langsys-js-typescript/-/langsys-js-typescript-0.6.5.tgz
+npm view langsys-js-typescript@0.6.5 exports
+               { '.': { types, import, require } }        <- no ./pure
+```
+
+So `npm ci` succeeds and `tsc --noEmit` then fails with nine `TS2307` "cannot find module
+`langsys-js-typescript/pure`" (reproduced by the reviewer at `src/api.ts:17`,
+`src/catalog.ts:22`, `src/constants.ts:53`, …). CI stays red until the core publishes a
+version carrying `./pure`. The Svelte lane's lockfile has the identical single condition.
+
+**And a publish from this tree would ship whatever the sibling happened to hold.** Because
+the core is a devDependency, `tsup` derives it as internal and BUNDLES it into `dist/`.
+The bundle is self-contained and carries no absolute paths — the provenance comment at
+`dist/index.mjs:5` reads `// ../langsys-js-typescript/dist/pure.mjs`, a relative marker,
+and sourcemap `sources` are relative too (checked: zero occurrences of an absolute home
+path in any `dist/` file, sourcemaps included). So there is no path leak. The hazard is
+the other one, and it is worse: **the published artifact would contain a snapshot of an
+uncommitted working tree**, with nothing in the tarball recording which revision.
+
+**The decision, which is not this commit's to make:**
+
+1. **Runtime `dependency` on the published core**, marked external, so consumers resolve
+   `langsys-js-typescript/pure` themselves — one shared copy, the version visible in the
+   consumer's lockfile, and `npm ls` tells the truth. Costs a real dependency where this
+   package currently has two.
+2. **Keep bundling, from a published version** — `npm install langsys-js-typescript@0.7.x`
+   with no symlink, so the bundled bytes come from an immutable tarball. Keeps the
+   dependency count at two; the core's code is then duplicated in every SDK that does this.
+
+Either way: **never publish from a tree that resolves the core through a symlink.**
+`_dev_/publish.sh` should refuse when `node_modules/langsys-js-typescript` is a symlink,
+which is a cheap mechanical guard for a mistake that is otherwise invisible in the tarball.
+
+## RELEASE-WAVE PRECONDITION: pin an artifact for CI
+
+The same symlink makes the test suite depend on a **live sibling working tree**. This is
+not theoretical: during one session the core was rebuilt underneath a run, and the same
+`npm test` gave different answers ten minutes apart with no change in this repo — three
+parity tests went from green to red mid-session because `NON_TRANSLATABLE_ELEMENTS` gained
+`noscript` upstream. The reviewer independently observed the core tree move twice during a
+single review.
+
+That is correct for a convergence phase, where the point is to track the core closely. It
+is wrong for CI, where a build that cannot be reproduced from its own inputs is not a
+check. CI needs the core at a pinned, immutable artifact — a published version, or a
+vendored tarball committed to this repo — before the release wave.
+
 ## Smaller items
 
 - **A cache-busting signal from the Translation Manager** would beat any TTL. Translation

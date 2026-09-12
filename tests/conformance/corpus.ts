@@ -84,9 +84,9 @@ export const CORPUS: Case[] = [
 
     // ---- elements that look technical but are not ----
     {
-        name: 'noscript content IS harvested',
+        name: 'noscript content is NOT harvested',
         html: '<div><p>Keep</p><noscript>Enable JavaScript to continue</noscript></div>',
-        proves: 'noscript renders when scripting is off, so its text is user-visible and must be translatable. It pattern-matches as technical and was wrongly in the skip list in the first draft',
+        proves: 'TOK-1 reversal (spec v8, blob b657b490, 2026-09-11). This case previously asserted the OPPOSITE and is kept rather than deleted: noscript text is genuinely user-visible with scripting off, but no browser SDK runs then, and with scripting on a parser yields the raw MARKUP string as the token. libxml2 has no scripting flag and disagrees with both. Excluding it makes every parser agree by construction',
     },
     {
         name: 'template content is harvested by NEITHER implementation',

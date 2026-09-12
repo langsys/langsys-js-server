@@ -61,7 +61,11 @@ export async function runConformance(mod) {
     // `nodejs_compat` flag fails, and it fails at import time rather than at use.
     check('module exports createLangsysServer', typeof createLangsysServer, 'function');
     check('module exports t', typeof t, 'function');
-    check('attribute list survived bundling', TRANSLATABLE_ATTRIBUTES.length, 15);
+    // 27 since convergence on PHP's list. The value is asserted rather than the shape
+    // because this check exists to prove the array SURVIVED BUNDLING — a tree-shaken or
+    // re-exported-away constant reads as `undefined.length` and throws, and an empty one
+    // would silently harvest no attributes at all.
+    check('attribute list survived bundling', TRANSLATABLE_ATTRIBUTES.length, 27);
 
     // -------------------------------------------------- 2. identity (THE check)
     // If any of these differ between runtimes, catalogs fragment along runtime lines —
@@ -89,8 +93,12 @@ export async function runConformance(mod) {
     // -------------------------------------------------------------- 3. Intl
     // Intl is a common source of cross-runtime drift, and plural selection feeds
     // user-visible copy.
-    check('canonicalizeLocale', canonicalizeLocale('en_gb'), 'en-GB');
-    check('canonicalizeLocale zh', canonicalizeLocale('zh_hans_cn'), 'zh-Hans-CN');
+    // Lowercase `xx-yy` per WIRE-3. These expectations were transcribed from an early
+    // revision of that rule which mandated canonical BCP 47; the rule has been corrected
+    // four times since, and 0.1.0 shipped the cased form on the wire because the check
+    // and the code were written from the same wrong source.
+    check('canonicalizeLocale', canonicalizeLocale('en_gb'), 'en-gb');
+    check('canonicalizeLocale zh', canonicalizeLocale('zh_hans_cn'), 'zh-hans-cn');
     const ru = '{n, plural, one {# элемент} few {# элемента} many {# элементов} other {# элемента}}';
     check('ICU plural ru one', interpolate(ru, { n: 1 }, 'ru'), '1 элемент');
     check('ICU plural ru few', interpolate(ru, { n: 3 }, 'ru'), '3 элемента');

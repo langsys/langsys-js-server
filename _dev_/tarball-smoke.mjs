@@ -71,12 +71,28 @@ const [it, de] = await Promise.all([
 ]);
 check('concurrent scopes do not leak locale', [it.locale, de.locale], ['it', 'de']);
 
-// The identity path. Printed rather than pinned to a literal: the value is asserted
-// against the published base SDK by tests/conformance/vendor-parity.test.ts, and pinning
-// it twice from the same memory would only assert this file agrees with itself.
+// The identity path, across the runtimes and the packed artifact.
+//
+// Printed rather than pinned to a literal: the cross-SDK value is asserted against the
+// shared fixtures in tests/conformance/shared-fixtures.test.ts, and pinning it a second
+// time from the same memory would only assert this file agrees with itself. (It used to
+// cite tests/conformance/vendor-parity.test.ts, which no longer exists — that file
+// compared the vendored copy against the published tarball, and the vendored copy is
+// gone.)
+//
+// BOTH categories are printed, and the pair is the point. `''` is what every shipping
+// caller passes. `'__uncategorized__'` is the cache-lookup sentinel, which CID-2 says is
+// never a hash input — the core now coalesces it, so the two agree. When they did not,
+// this line printed the sentinel digest alone and a reader had no way to tell which of
+// the two they were looking at.
 const tokens = tokenizeHtml('<p>Based on <b>5</b> reviews</p>');
 check('tokenizer discriminates arity', tokens.length > 1, true);
-console.log(`  DIGEST ${generateCustomId('__uncategorized__', tokens)}`);
+check(
+    'CID-2: the sentinel is not a distinct hash input',
+    generateCustomId('__uncategorized__', tokens),
+    generateCustomId('', tokens),
+);
+console.log(`  DIGEST ${generateCustomId('', tokens)}`);
 
 // Documented audit behaviour: <Translate> stamps no marker, so it is invisible by default.
 check('audit finds no content block by default', auditRenderedHtml('<div data-ls-contentblock>x</div>').clean, true);
@@ -86,7 +102,7 @@ check(
     false,
 );
 
-check('ships the 15-attribute list', TRANSLATABLE_ATTRIBUTES.length, 15);
+check('ships the 27-attribute list', TRANSLATABLE_ATTRIBUTES.length, 27);
 
 console.log(failures === 0 ? 'TARBALL SMOKE PASS' : `TARBALL SMOKE FAIL (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

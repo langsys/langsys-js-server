@@ -15,7 +15,8 @@
 import { getScope, NO_SCOPE_MESSAGE } from './context.js';
 import { queueMiss } from './harvest.js';
 import { UNCATEGORIZED } from './constants.js';
-import { findUnusedParamKeys, interpolate } from './vendor/pure.js';
+import { interpolate } from 'langsys-js-typescript/pure';
+import { findUnusedParamKeys } from './params.js';
 import { warnOnceGlobal, type Logger } from './logger.js';
 import type { TranslateParams } from './types.js';
 
@@ -76,10 +77,29 @@ export const t: TFunction = (
 
     const bucket = scope.catalog[category || UNCATEGORIZED];
     const value = bucket?.[phrase];
+
+    // CAT-2 — DISPLAY decides on the value. `null`, `''` and a content block's object
+    // all fall back to source text; rendering them would blank the copy or print
+    // "[object Object]".
     const hit = typeof value === 'string' && value.length > 0;
     const translated = hit ? (value as string) : phrase;
 
-    if (!hit && scope.locale !== scope.baseLocale) {
+    // CAT-1/CAT-3 — REGISTRATION decides on PRESENCE, and this is deliberately a
+    // different question from `hit`. Three states exist and only the first may register:
+    // absent (genuine miss) · present-with-null (registered, translation running) ·
+    // present-non-empty (translated). Deciding this from `hit` collapses the first two,
+    // so every render re-registers content that registered seconds earlier — for the
+    // whole machine-translation window, worst on the projects with the most untranslated
+    // copy. CAT-3 is the same defect one level up: a registered content block comes back
+    // as an OBJECT, and reading that as a miss re-POSTs the entire block on every visit.
+    //
+    // `hasOwnProperty`, NOT `in`. The prototype chain makes `in` answer true for
+    // `toString`, `constructor` and `hasOwnProperty`, which would silently suppress
+    // registration of any phrase that happens to share a name with an Object member —
+    // a miss that can never be discovered because nothing reports it.
+    const known = bucket !== undefined && Object.prototype.hasOwnProperty.call(bucket, phrase);
+
+    if (!known && scope.locale !== scope.baseLocale) {
         // A miss in the BASE locale is not a miss — the phrase is already in the base
         // language and there is nothing to look up. Queueing those would register every
         // phrase on every base-locale render.

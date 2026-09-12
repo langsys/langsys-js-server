@@ -30,7 +30,7 @@ import {
     VALUE_TRANSLATABLE_ELEMENTS,
     VALUE_TRANSLATABLE_INPUT_TYPES,
 } from './constants.js';
-import { normalizeMarkupPlaceholders } from './vendor/pure.js';
+import { normalizeMarkupPlaceholders, normalizeTokenText } from 'langsys-js-typescript/pure';
 
 type Node = DefaultTreeAdapterMap['node'];
 type ParentNode = DefaultTreeAdapterMap['parentNode'];
@@ -135,6 +135,23 @@ export function isPhraseMarked(element: Element): boolean {
  *  2. `value` is emitted AFTER the whole constant loop — then `<button>`, then
  *     `<input type=submit|button>`.
  */
+/**
+ * An attribute value canonicalised the same way a text node is (TOK-4).
+ *
+ * `trim()` alone was the bug this replaces. A multiline `alt` produced a DIFFERENT id
+ * from the identical sentence in a `<p>`, because text nodes collapsed their internal
+ * runs and attributes did not — so the same words registered twice depending on where
+ * the author happened to wrap the line. Invisible in rendered output, and invisible in
+ * any fixture whose attribute values are single-line, which is all of the obvious ones.
+ *
+ * `normalizeTokenText` comes from the core, so this cannot drift from the client SDK we
+ * hydrate over: it is the same function, not the same intent.
+ */
+function normalizedAttribute(element: Element, attr: string): string | undefined {
+    const raw = getAttribute(element, attr);
+    return raw === undefined || raw === null ? undefined : normalizeTokenText(raw);
+}
+
 function tokenizeAttributes(
     element: Element,
     tokens: string[],
@@ -149,19 +166,19 @@ function tokenizeAttributes(
     // so it is intentionally not reproduced. See `content` caveats in the README.
 
     for (const attr of translatableAttributes) {
-        const value = getAttribute(element, attr)?.trim();
+        const value = normalizedAttribute(element, attr);
         if (value) tokens.push(normalizeMarkupPlaceholders(value));
     }
 
     if ((VALUE_TRANSLATABLE_ELEMENTS as readonly string[]).includes(tagName)) {
-        const value = getAttribute(element, 'value')?.trim();
+        const value = normalizedAttribute(element, 'value');
         if (value) tokens.push(normalizeMarkupPlaceholders(value));
     }
 
     if (tagName === 'input') {
         const inputType = getAttribute(element, 'type')?.toLowerCase();
         if (inputType && (VALUE_TRANSLATABLE_INPUT_TYPES as readonly string[]).includes(inputType)) {
-            const value = getAttribute(element, 'value')?.trim();
+            const value = normalizedAttribute(element, 'value');
             if (value) tokens.push(normalizeMarkupPlaceholders(value));
         }
     }
@@ -178,7 +195,7 @@ function collectOptionText(select: Element): string[] {
     const out: string[] = [];
     const visit = (node: Node): void => {
         if (isElement(node) && node.tagName.toLowerCase() === 'option') {
-            const text = textContentOf(node).trim();
+            const text = normalizeTokenText(textContentOf(node));
             if (text) out.push(text);
         }
         if (hasChildNodes(node)) for (const child of node.childNodes) visit(child);
@@ -265,7 +282,23 @@ export function tokenizeHtml(innerHtml: string, options: TokenizeOptions = {}): 
         translatableAttributes = TRANSLATABLE_ATTRIBUTES,
     } = options;
 
-    const fragment = parseFragment(innerHtml);
+    // `scriptingEnabled: true` is parse5's default. Stated explicitly as a declaration of
+    // intent, NOT as a guard that anything currently checks.
+    //
+    // **It is unobservable on this tree, and saying so is the point.** While `<noscript>`
+    // was harvested the flag decided its id: scripting on yields one raw-text token
+    // (`<p>Enable JavaScript</p>`, measured in headless Chromium 153 and matched by
+    // parse5), scripting off yields parsed elements. TOK-1 now excludes `<noscript>`
+    // entirely, so both parse modes produce identical tokens and flipping this line turns
+    // NOTHING red — verified, 392 passed either way. There is no test here that can fail
+    // on it, and this comment previously claimed otherwise.
+    //
+    // Kept anyway, for one reason that is not a guard: it records which parser mode this
+    // package's identity was established under, so a future raw-text context (or a
+    // reversal of the noscript exclusion) starts from a stated position rather than from
+    // whatever parse5 defaults to that year. If it ever becomes observable again, it
+    // needs a test at that point — the explicit argument is not a substitute for one.
+    const fragment = parseFragment(innerHtml, { scriptingEnabled: true });
     const tokens: string[] = [];
     walkForTokens(fragment.childNodes, tokens, duplicateSelectOptions, skipCodeElements, translatableAttributes);
     return tokens;

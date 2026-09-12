@@ -21,15 +21,12 @@
  *   > you'll pay for by hand later. And it costs nothing if you never need it.
  */
 
-import { generateCustomId, generateLegacyCustomId } from './vendor/pure.js';
+import { generateCustomId, generateLegacyCustomId } from 'langsys-js-typescript/pure';
 import { tokenizeHtml } from './tokenizer.js';
-import { PHP_ONLY_TRANSLATABLE_ATTRIBUTES, TRANSLATABLE_ATTRIBUTES } from './constants.js';
+import { HISTORICAL_TRANSLATABLE_ATTRIBUTES_15, UNCATEGORIZED } from './constants.js';
 
 /** The 27-entry list convergence will land on. Read-side only until it does. */
-const CONVERGED_TRANSLATABLE_ATTRIBUTES = [
-    ...TRANSLATABLE_ATTRIBUTES,
-    ...PHP_ONLY_TRANSLATABLE_ATTRIBUTES,
-] as const;
+
 
 export interface Derivation {
     id: string;
@@ -48,7 +45,21 @@ export interface BlockIdentity {
     fallbacks: Derivation[];
 }
 
-export function deriveBlockIdentity(innerHtml: string, category: string): BlockIdentity {
+export function deriveBlockIdentity(innerHtml: string, rawCategory: string): BlockIdentity {
+    // CID-2 at the BOUNDARY, not at one hasher.
+    //
+    // `'__uncategorized__'` is a cache-lookup namespace and must never be a hash input.
+    // The core coalesces it inside `generateCustomId`, so the primary id was already
+    // correct — but `generateLegacyCustomId` deliberately does NOT coalesce (it has to
+    // reproduce what an untyped caller actually stored), so passing the sentinel through
+    // produced an extra legacy fallback that an empty category never produces. Two
+    // callers, one guarded and one not, is exactly the shape CID-2 warns about: the
+    // export everyone reads was fine, and the divergence lived in the caller.
+    //
+    // Normalising here makes the WHOLE derivation set a function of the same category,
+    // which is the property `tests/conformance/cid-2.test.ts` asserts — equal fallback
+    // sets, not merely equal primary ids.
+    const category = rawCategory === UNCATEGORIZED ? '' : rawCategory;
     const primaryTokens = tokenizeHtml(innerHtml);
 
     const primary: Derivation = {
@@ -69,23 +80,21 @@ export function deriveBlockIdentity(innerHtml: string, category: string): BlockI
         fallbacks.push({ id, tokens, label });
     };
 
-    // 1. Siblings do not skip <script>/<style>. A block registered by the client SDK or
-    //    by langsys-php over the same markup carries their tokens, so read under them.
-    const unskippedTokens = tokenizeHtml(innerHtml, { skipCodeElements: false });
-    add('sibling-no-skip', unskippedTokens, generateCustomId(category, unskippedTokens));
-
-    // 2. When the attribute lists converge on PHP's 27, every block whose subtree
-    //    carries one of the twelve re-keys. Reading under the converged list NOW means
-    //    that day is a no-op for lookups instead of a catalog migration.
+    // The two DIVERGENCE fallbacks that used to sit here are gone, and their absence is
+    // the point: `sibling-no-skip` existed because the siblings tokenized <script> and
+    // <style> contents and this package did not, and `converged-27` existed because the
+    // attribute lists had not converged. Both divergences ended when the core shipped
+    // `langsys-js-typescript/pure` — the skip list and the twenty-seven now come FROM the
+    // core, so there is no second shape to read under. A fallback for a divergence that
+    // no longer exists is not caution, it is a lookup that can only ever return the same
+    // id as the primary.
     //
-    //    Note this is the *same* generateCustomId over a SHORTER/LONGER attribute list —
-    //    a second token DERIVATION, not a second hash. That distinction matters for
-    //    retirement: retiring an encoding fallback requires rebasing every block;
-    //    retiring a derivation fallback requires rebasing only the blocks it covers.
-    const convergedTokens = tokenizeHtml(innerHtml, {
-        translatableAttributes: CONVERGED_TRANSLATABLE_ATTRIBUTES,
-    });
-    add('converged-27', convergedTokens, generateCustomId(category, convergedTokens));
+    // The HISTORICAL fallbacks below are deliberately kept. They are a different thing:
+    // not a disagreement between implementations, but a record of what this package
+    // actually stored before the hash and the token shape were corrected. CID-3 requires
+    // tolerating those on lookup, and v8 widened that obligation to the reading side for
+    // every profile. Deleting them would orphan real catalog entries rather than retire a
+    // divergence.
 
     // 3. The two historical shapes that used LEGACY tokens (<select> option text
     //    harvested twice, pre-0.6.3). There are two, not one, because the md5 fix and the
@@ -105,9 +114,14 @@ export function deriveBlockIdentity(innerHtml: string, category: string): BlockI
     //    Note `md5Legacy` differs from `md5` only for NON-ASCII input, so for an
     //    all-ASCII block the third derivation collapses onto the second. That is correct
     //    and is why `add()` dedups by id.
+    //    Pinned to the FIFTEEN, not to the current list. These derivations reproduce
+    //    what was stored, and what was stored was keyed from fifteen attributes. Letting
+    //    them track the live list would make them a hybrid that never existed on any
+    //    version — a lookup shape matching no catalog entry ever written.
     const legacyTokens = tokenizeHtml(innerHtml, {
         duplicateSelectOptions: true,
         skipCodeElements: false,
+        translatableAttributes: HISTORICAL_TRANSLATABLE_ATTRIBUTES_15,
     });
     add('legacy-tokens-current-hash', legacyTokens, generateCustomId(category, legacyTokens));
     add('legacy-tokens-legacy-hash', legacyTokens, generateLegacyCustomId(category, legacyTokens));

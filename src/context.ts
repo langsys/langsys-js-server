@@ -19,7 +19,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Catalog, MissingPhrase } from './types.js';
+import type { Catalog, KeyType, MissingPhrase } from './types.js';
 import type { Logger } from './logger.js';
 
 export interface RequestScope {
@@ -36,6 +36,30 @@ export interface RequestScope {
     projectId: string | number;
     baseLocale: string;
     logger: Logger;
+    /**
+     * This request's write capability, as the server most recently reported it, captured
+     * when the scope was built and immutable for the request's lifetime.
+     *
+     * `undefined` means the server never sent `write_enabled` — a pre-capability server.
+     * That is a version signal, never permission; see GATE-8 and `canHarvest`.
+     *
+     * Held here rather than read off the server instance at drain time so the decision a
+     * request acts on is the one that was true when it started. The drain runs after the
+     * response has flushed, by which point a concurrent catalog refresh may have changed
+     * the instance's copy — and a request must not register under a capability that
+     * arrived after it finished rendering.
+     */
+    writeEnabled: boolean | undefined;
+    /** Captured alongside `writeEnabled`, and used ONLY for GATE-8's bounded fallback. */
+    keyType: KeyType;
+    /**
+     * The server's registration batch cap for this request (REG-9).
+     *
+     * Captured per request for the same reason as the capability: the drain runs after
+     * the response flushed, and a batch must be chunked to the limit that was current
+     * when it was collected.
+     */
+    batchLimit: number;
     /** True once at least one drain has completed for this request. */
     drained: boolean;
     /** Guard against two drains running concurrently for the same request. */

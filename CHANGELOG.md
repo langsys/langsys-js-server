@@ -5,6 +5,78 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 - unreleased
+
+Closes the five conformance defects the 838 intake measured, and replaces the vendored
+copy of the core's identity functions with the core's own `/pure` subpath.
+
+**Content-block ids change for some blocks.** Every id-affecting change is listed under
+*Changed* below. The hash itself is untouched — `md5(JSON.stringify([category, tokens]))`
+as before — so every moved id moved because the TOKENS changed, not the hashing. Blocks
+whose markup carries none of the listed constructs keep the ids they had.
+
+### Fixed
+
+- **Catalog cache keys carry the project id** (CACHE-1). `langsys:catalog:<locale>` had no
+  project in it, so two projects sharing a Redis served each other's catalogs — reproduced
+  before fixing. Now `langsys:catalog:<projectId>:<locale>`.
+- **A catalog miss is decided by key presence, not truthiness** (CAT-1, CAT-3). A phrase
+  present-with-`null` re-registered on every render for the whole machine-translation
+  window, and a registered content block — which arrives as an object — was re-POSTed
+  under its raw custom id on every visit. Display still falls back to source text for
+  `null`, `''` and objects (CAT-2); only the registration decision changed.
+- **The write decision comes from the server's `write_enabled`, never from `key_type`**
+  (GATE-1, GATE-8). It previously failed in both directions: `write_enabled: false` still
+  registered, and a `read` or `ip_write` key with `write_enabled: true` refused — which
+  disables discovery entirely, since the renderer runs a customer's page on an `ip_write`
+  key. The flag is read from both locations the API uses (inside `data` on
+  `authorize-project`, envelope level on `/translations`) and captured per request.
+- **Registrations are chunked to the server's advertised batch limit** (REG-9).
+  `langsys_settings.translatable_items.batch_limit` was never read and batches went out
+  whole — 430 phrases in a single POST, which the server rejects outright.
+- **Locales go out lowercase** (WIRE-3). `0.1.0` sent `locale=de-DE` and cached under
+  `langsys:catalog:es-CR`; the contract is `de-de`. Came in with the `/pure` swap.
+
+### Changed
+
+Everything here can move a `custom_id`:
+
+- **Translatable attributes: 15 → 27**, matching `langsys-php` in its order, consumed from
+  the core rather than restated. The twelve are APPENDED and nothing already in the list
+  moved, so a block re-keys only if its subtree carries one of: `data-confirm`,
+  `data-tooltip`, `data-title`, `data-content`, `data-original-title`, `data-bs-title`,
+  `data-bs-content`, `data-loading-text`, `data-success-message`, `data-warning-message`,
+  `data-empty-message`, `data-placeholder`.
+- **`<noscript>` is no longer tokenized** (TOK-1, reversed in spec v8). With scripting
+  enabled — the HTML default — a parser yields the noscript body as a raw MARKUP string,
+  so harvesting it sent markup to machine translation; and libxml2, which has no scripting
+  flag, disagreed with both a browser and parse5 about the token. Blocks containing a
+  `<noscript>` re-key. The fallback text stays in the base language, which no client SDK
+  could ever have translated.
+- **Attribute values and `<option>` text now collapse internal whitespace** exactly as
+  text nodes do (TOK-4), via the core's `normalizeTokenText`. They were previously only
+  trimmed, so a multiline `alt` derived a different id from the same sentence in a `<p>`.
+  Blocks whose attribute values or option text contain a newline, tab or run of spaces
+  re-key.
+- **`'__uncategorized__'` is normalised to `''` before hashing** (CID-2). It is a
+  cache-lookup namespace and was never a hash input on any shipping path here, but a
+  caller passing it explicitly now gets the same id — and the same fallback set — as an
+  empty category.
+- **Cache-key format changed**, which orphans every existing `langsys:catalog:<locale>`
+  entry. Harmless: catalogs are TTL'd and re-fetched, nothing durable is keyed on them.
+- `KeyType` gains `ip_write`, so a refusal on that key type can say something true instead
+  of reporting an undetermined key.
+
+### Removed
+
+- `src/vendor/pure.ts` and `_dev_/vendor-pure.sh`. Identity now comes from
+  `langsys-js-typescript/pure`. The vendored copy was pinned at `0.6.5` while the core
+  moved on, which is where the WIRE-3 defect came from.
+- The two read-side DIVERGENCE derivations (`sibling-no-skip`, `converged-27`). Both
+  existed for disagreements with the sibling SDKs that have since ended. The two
+  HISTORICAL legacy-token derivations are kept, pinned to the fifteen attributes that
+  actually produced those ids (CID-3).
+
 ## 0.1.0 - 2026-08-22
 
 First release. Request-scoped `t()` that renders translated, crawler-visible HTML during

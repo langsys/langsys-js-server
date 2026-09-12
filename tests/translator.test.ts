@@ -63,6 +63,107 @@ describe('resolution', () => {
     });
 });
 
+describe('CAT-1/CAT-2/CAT-3 — presence decides registration, the value decides display', () => {
+    /**
+     * These two decisions are made from the same lookup and MUST NOT be made from the
+     * same test. Before this block one `hit` boolean drove both: correct for display,
+     * wrong for registration.
+     *
+     * Three states, and only the first may register:
+     *   absent               genuine miss
+     *   present-with-null    registered, machine translation running
+     *   present-non-empty    translated
+     *
+     * Collapsing the first two re-registers content that registered seconds earlier, for
+     * the whole MT window — worst on exactly the projects with the most untranslated
+     * copy. CAT-3 is the same defect one level up and costs more: a registered content
+     * block comes back as an OBJECT, and a write-enabled session that reads that as a
+     * miss re-POSTs the block on every visit.
+     *
+     * The prototype cases are not paranoia. The fix for the above is an own-property
+     * check, and the obvious spelling of it — `phrase in bucket` — reads `toString`,
+     * `constructor` and `hasOwnProperty` as KNOWN, silently suppressing their
+     * registration. `t('toString')` currently registers for an incidental reason (the
+     * inherited value is a function, so the typeof guard rejects it); these tests exist
+     * so that stays true on purpose rather than by accident.
+     */
+    const missesOf = async (catalog: Catalog, phrases: string[], locale = 'it') => {
+        const run = serve(catalog, locale);
+        const result = await run(() => phrases.map((p) => t(p)));
+        return { queued: result.missing.map((m) => m.phrase), rendered: result.value };
+    };
+
+    it('does NOT re-register a phrase that is present with a null value', async () => {
+        const { queued } = await missesOf({ __uncategorized__: { Pending: null as unknown as string } }, ['Pending']);
+        expect(queued).not.toContain('Pending');
+    });
+
+    it('does NOT re-register a phrase that is present with an empty string', async () => {
+        const { queued } = await missesOf({ __uncategorized__: { Pending: '' } }, ['Pending']);
+        expect(queued).not.toContain('Pending');
+    });
+
+    it('does NOT re-register a content block present as an object (CAT-3)', async () => {
+        const cid = '0ab6be3c04761e7643cb965ae2e9de2e';
+        const block = { Hello: null, World: null } as unknown as string;
+        const { queued } = await missesOf({ __uncategorized__: { [cid]: block } }, [cid]);
+        expect(queued).not.toContain(cid);
+    });
+
+    it('POSITIVE CONTROL: a genuinely absent phrase IS registered', async () => {
+        // Without this, every assertion above is satisfiable by never registering
+        // anything at all.
+        const { queued } = await missesOf({ __uncategorized__: { Pending: null as unknown as string } }, ['NotThere']);
+        expect(queued).toContain('NotThere');
+    });
+
+    it('still registers inherited Object.prototype names — `in` would not', async () => {
+        const { queued } = await missesOf({ __uncategorized__: {} }, [
+            'toString',
+            'constructor',
+            'hasOwnProperty',
+            'valueOf',
+        ]);
+        expect(queued).toEqual(
+            expect.arrayContaining(['toString', 'constructor', 'hasOwnProperty', 'valueOf']),
+        );
+    });
+
+    it('an inherited name present as a REAL entry is not re-registered', async () => {
+        // The other half of the prototype case: once "toString" is genuinely in the
+        // catalog it must behave like any other registered phrase.
+        const { queued, rendered } = await missesOf(
+            { __uncategorized__: { toString: 'Da stringa' } },
+            ['toString'],
+        );
+        expect(queued).not.toContain('toString');
+        expect(rendered).toEqual(['Da stringa']);
+    });
+
+    it('CAT-2: the same three states still DISPLAY source text', async () => {
+        // Registration stops for these; display must not. An implementer can satisfy
+        // CAT-1 and still ship blank <h1>s.
+        const cid = 'ff'.repeat(16);
+        const { rendered } = await missesOf(
+            {
+                __uncategorized__: {
+                    NullValue: null as unknown as string,
+                    EmptyValue: '',
+                    [cid]: { inner: null } as unknown as string,
+                },
+            },
+            ['NullValue', 'EmptyValue', cid],
+        );
+        expect(rendered).toEqual(['NullValue', 'EmptyValue', cid]);
+    });
+
+    it('a miss in the BASE locale is still never registered', async () => {
+        // Pre-existing behaviour the presence check must not disturb.
+        const { queued } = await missesOf({ __uncategorized__: {} }, ['Anything'], 'en');
+        expect(queued).toEqual([]);
+    });
+});
+
 describe('interpolation', () => {
     it('substitutes params, rather than rendering the literal placeholder', async () => {
         // Omitting interpolation renders `Ciao {name}` server-side and `Ciao Bob`

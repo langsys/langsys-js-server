@@ -51,10 +51,12 @@ describe.skipIf(!built)('built artifact', () => {
     });
 
     it('does not bundle the base SDK singleton graph', () => {
-        // The whole reason `src/vendor/pure.ts` exists: importing langsys-js-typescript
-        // instantiates LangsysApp, Translations, the shared miss queue and the shared
-        // auth header at module scope. If a stray import ever pulls the real package in,
-        // this catches it.
+        // The whole reason this package consumes `langsys-js-typescript/pure` rather than
+        // the core's main entry: importing the main entry instantiates LangsysApp,
+        // Translations, the shared miss queue and the shared auth header at module scope —
+        // module-global state inside a server process, which is the one thing this package
+        // exists to avoid. The subpath is side-effect-free by construction; this catches a
+        // stray import that reaches past it to the real package.
         const esm = readFileSync(distEsm, 'utf8');
         expect(esm).not.toMatch(/from ['"]langsys-js-typescript['"]/);
         expect(esm).not.toMatch(/new LangsysAppClass\(\)/);

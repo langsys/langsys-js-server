@@ -20,8 +20,8 @@
 import { describe, expect, it } from 'vitest';
 import { deriveBlockIdentity } from '../src/derivations.js';
 import { tokenizeHtml } from '../src/tokenizer.js';
-import { generateCustomId, generateLegacyCustomId } from '../src/vendor/pure.js';
-import { PHP_ONLY_TRANSLATABLE_ATTRIBUTES, TRANSLATABLE_ATTRIBUTES } from '../src/constants.js';
+import { generateCustomId, generateLegacyCustomId } from 'langsys-js-typescript/pure';
+import { HISTORICAL_TRANSLATABLE_ATTRIBUTES_15 } from '../src/constants.js';
 
 const labelsOf = (html: string, category = 'cat') =>
     deriveBlockIdentity(html, category).fallbacks.map((f) => f.label);
@@ -35,71 +35,51 @@ describe('the primary derivation', () => {
     });
 
     it('is what registration would use, never a fallback', () => {
-        // Guards a mutation that swapped the primary onto the converged 27-attribute list:
-        // registering under a list we have not shipped would orphan every block on the day
-        // the client family converges.
+        // Before convergence this asserted the OPPOSITE — that `data-tooltip` produced no
+        // token, because registering under a list the client family had not shipped would
+        // have orphaned every block on the day it did. The core shipped the twenty-seven,
+        // so the same assertion now runs the other way: the attribute IS harvested, and
+        // the primary is what registration uses.
         const { primary } = deriveBlockIdentity('<div data-tooltip="Hi">x</div>', 'cat');
-        expect(primary.tokens).toEqual(['x']);
-        expect(primary.id).toBe(generateCustomId('cat', ['x']));
+        expect(primary.tokens).toEqual(['Hi', 'x']);
+        expect(primary.id).toBe(generateCustomId('cat', ['Hi', 'x']));
     });
 });
 
-describe('sibling-no-skip — blocks registered by the client SDK or langsys-php', () => {
-    it('is offered when the markup contains a script', () => {
-        const html = '<p>Keep</p><script>var a=1;</script>';
-        const { fallbacks } = deriveBlockIdentity(html, 'cat');
-        const sibling = fallbacks.find((f) => f.label === 'sibling-no-skip');
-
-        expect(sibling, 'sibling-no-skip missing — a block registered by either sibling would not resolve').toBeTruthy();
-        expect(sibling!.tokens).toEqual(['Keep', 'var a=1;']);
-        expect(sibling!.id).toBe(generateCustomId('cat', ['Keep', 'var a=1;']));
+describe('the divergence fallbacks are GONE, because the divergences are', () => {
+    /**
+     * `sibling-no-skip` and `converged-27` were read-side tolerance for two real
+     * disagreements: the siblings tokenized `<script>`/`<style>` contents and this
+     * package did not, and the attribute lists had not converged. Both ended when the
+     * core shipped `langsys-js-typescript/pure` — the skip list and the twenty-seven now
+     * come FROM the core, so there is no second shape to read under.
+     *
+     * These assertions are the inverse of the ones they replace, and they are worth
+     * keeping rather than deleting: a fallback for a divergence that no longer exists
+     * returns the same id as the primary, so it costs a lookup and reports coverage it
+     * does not have.
+     */
+    it('offers no sibling-no-skip derivation for script-bearing markup', () => {
+        expect(labelsOf('<p>Keep</p><script>var a=1;</script>')).not.toContain('sibling-no-skip');
     });
 
-    it('reproduces the sibling output byte-for-byte', () => {
-        const html = '<p>Keep</p><style>.a{}</style>';
-        const sibling = deriveBlockIdentity(html, 'cat').fallbacks.find(
-            (f) => f.label === 'sibling-no-skip',
-        );
-        expect(sibling!.tokens).toEqual(tokenizeHtml(html, { skipCodeElements: false }));
+    it('offers no converged-27 derivation for markup carrying one of the twelve', () => {
+        expect(labelsOf('<div data-tooltip="Hi">x</div>')).not.toContain('converged-27');
     });
 
-    it('is NOT offered when there is nothing to skip', () => {
-        // The dedup guard. Without it the fallback list looks like coverage it does not
-        // have, and every lookup pays for derivations that collapse onto the primary.
-        expect(labelsOf('<p>Plain text</p>')).not.toContain('sibling-no-skip');
-    });
-});
-
-describe('converged-27 — the day the attribute lists converge', () => {
-    it('is offered when the markup carries one of PHP twelve', () => {
-        const html = '<div data-tooltip="Hi">x</div>';
-        const converged = deriveBlockIdentity(html, 'cat').fallbacks.find(
-            (f) => f.label === 'converged-27',
-        );
-
-        expect(converged, 'converged-27 missing — the convergence would be a catalog migration rather than a no-op').toBeTruthy();
-        expect(converged!.tokens).toEqual(['Hi', 'x']);
-        expect(converged!.id).toBe(
-            generateCustomId('cat', tokenizeHtml(html, {
-                translatableAttributes: [...TRANSLATABLE_ATTRIBUTES, ...PHP_ONLY_TRANSLATABLE_ATTRIBUTES],
-            })),
-        );
+    it('agrees with the core on script-bearing markup, which is WHY the fallback went', () => {
+        // The load-bearing half. Asserting the fallback is absent proves only that it was
+        // deleted; this proves it was safe to delete — our tokens for the same markup are
+        // now what the core derives, so there is nothing left to read under.
+        const html = '<p>Keep</p><script>var a=1;</script><style>.a{}</style>';
+        expect(tokenizeHtml(html)).toEqual(['Keep']);
     });
 
-    it('covers every one of the twelve, not just the one that was easy to test', () => {
-        for (const attr of PHP_ONLY_TRANSLATABLE_ATTRIBUTES) {
-            const html = `<div ${attr}="Value">x</div>`;
-            const converged = deriveBlockIdentity(html, 'cat').fallbacks.find(
-                (f) => f.label === 'converged-27',
-            );
-            expect(converged, `no converged-27 derivation for ${attr}`).toBeTruthy();
-            expect(converged!.tokens).toEqual(['Value', 'x']);
-        }
-    });
-
-    it('is NOT offered for markup carrying none of them — the negative control', () => {
-        // Without this, a derivation that always used 27 attributes would also pass above.
-        expect(labelsOf('<div title="T">x</div>')).not.toContain('converged-27');
+    it('POSITIVE CONTROL: fallbacks are still offered where a real shape exists', () => {
+        // Without this, "no fallback" is satisfiable by a deriveBlockIdentity that
+        // returns an empty array for everything.
+        const labels = labelsOf('<select><option>One</option><option>Two</option></select>');
+        expect(labels.length).toBeGreaterThan(0);
     });
 });
 
@@ -112,6 +92,7 @@ describe('the two historical LEGACY-token shapes', () => {
         const legacyTokens = tokenizeHtml(SELECT, {
             duplicateSelectOptions: true,
             skipCodeElements: false,
+            translatableAttributes: HISTORICAL_TRANSLATABLE_ATTRIBUTES_15,
         });
         const found = deriveBlockIdentity(SELECT, 'cat').fallbacks.find(
             (f) => f.label === 'legacy-tokens-current-hash',
@@ -128,6 +109,7 @@ describe('the two historical LEGACY-token shapes', () => {
         const legacyTokens = tokenizeHtml(html, {
             duplicateSelectOptions: true,
             skipCodeElements: false,
+            translatableAttributes: HISTORICAL_TRANSLATABLE_ATTRIBUTES_15,
         });
         const found = deriveBlockIdentity(html, 'cat').fallbacks.find(
             (f) => f.label === 'legacy-tokens-legacy-hash',
@@ -144,6 +126,7 @@ describe('the two historical LEGACY-token shapes', () => {
         const legacyTokens = tokenizeHtml(SELECT, {
             duplicateSelectOptions: true,
             skipCodeElements: false,
+            translatableAttributes: HISTORICAL_TRANSLATABLE_ATTRIBUTES_15,
         });
         const sdkCandidates = [
             generateCustomId('cat', legacyTokens),
@@ -160,6 +143,7 @@ describe('the two historical LEGACY-token shapes', () => {
         const legacyTokens = tokenizeHtml(SELECT, {
             duplicateSelectOptions: true,
             skipCodeElements: false,
+            translatableAttributes: HISTORICAL_TRANSLATABLE_ATTRIBUTES_15,
         });
         // Once from the recursive descent, once from the explicit sweep.
         expect(legacyTokens.filter((t) => t === 'One')).toHaveLength(2);

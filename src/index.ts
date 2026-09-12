@@ -13,9 +13,9 @@
 import { LangsysApi, DEFAULT_API_URL } from './api.js';
 import { CatalogStore, DEFAULT_TTL_SECONDS, normalizeCatalog } from './catalog.js';
 import { runInScope, type RequestScope } from './context.js';
-import { drainMissQueue, scheduleDrain } from './harvest.js';
+import { DEFAULT_BATCH_LIMIT, drainMissQueue, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
-import { canonicalizeLocale } from './vendor/pure.js';
+import { canonicalizeLocale } from 'langsys-js-typescript/pure';
 import type {
     Catalog,
     KeyType,
@@ -27,7 +27,12 @@ import type {
 export { t, type TFunction } from './translator.js';
 export { tokenizeHtml, isPhraseMarked, isTranslationExcluded, type TokenizeOptions } from './tokenizer.js';
 export { deriveBlockIdentity, type BlockIdentity, type Derivation } from './derivations.js';
-export { generateCustomId, generateLegacyCustomId, interpolate, canonicalizeLocale } from './vendor/pure.js';
+export {
+    generateCustomId,
+    generateLegacyCustomId,
+    interpolate,
+    canonicalizeLocale,
+} from 'langsys-js-typescript/pure';
 export {
     TRANSLATABLE_ATTRIBUTES,
     PHRASE_MARKER_ATTRS,
@@ -94,16 +99,38 @@ export class LangsysServer {
     private readonly projectId: string | number;
 
     /**
-     * Key type is discovered from the authorize response, not configured, so "is this a
-     * write key" is knowable before any registration attempt.
+     * Key type is discovered from the authorize response, not configured.
      *
-     * This is the one piece of instance state that is written after construction. It is
-     * safe because it is a property of the API KEY, not of a request — every request on
-     * this instance uses the same key, so there is nothing to race on. Stated explicitly
-     * because "an instance field that is written once" is precisely the shape that turns
-     * out to be per-request state in disguise.
+     * It never decides whether to write — that is `write_enabled`, and GATE-1 is explicit
+     * that `key_type` describes the KEY while capability describes the SESSION. This is
+     * kept only for GATE-8's bounded fallback, and caching it is sanctioned: it is a
+     * property of the API key, so every request on this instance sees the same value and
+     * there is nothing to race on.
+     *
+     * Three fields on this class are written after construction — this, `writeEnabled`
+     * and `batchLimit` — and all three are server facts rather than request facts. Each
+     * is COPIED into the request scope in `run()`, and nothing reads them at drain time.
+     * Stated explicitly because "an instance field that is written once" is precisely the
+     * shape that turns out to be per-request state in disguise, and `writeEnabled` is a
+     * value that genuinely would be per-request on an SDK that supported write grants.
      */
     private keyType: KeyType = 'unknown';
+    /**
+     * The session's write capability as the server most recently reported it.
+     * `undefined` = never reported, i.e. a pre-capability server (GATE-8).
+     *
+     * Refreshed from BOTH endpoints that carry it — `authorize()` seeds it, and every
+     * catalog fetch's envelope updates it — so nothing here is latched at init. Each
+     * request copies the current value into its own scope; this field is never read at
+     * drain time.
+     */
+    private writeEnabled: boolean | undefined;
+    /**
+     * The server's registration batch cap (REG-9), seeded from authorize and defaulted
+     * until it answers. Never hardcoded at the send site — the server enforces this and
+     * rejects an oversized batch wholesale.
+     */
+    private batchLimit: number = DEFAULT_BATCH_LIMIT;
     private authorizing?: Promise<void>;
     /**
      * When the last authorize attempt completed, successful or not.
@@ -136,6 +163,11 @@ export class LangsysServer {
             this.logger,
             config.catalogTtlSeconds ?? DEFAULT_TTL_SECONDS,
             config.cache,
+            // GATE-8 constraint 2: re-evaluated per response. The catalog endpoint
+            // reports the flag on its envelope, and that fetch happens anyway.
+            (writeEnabled) => {
+                this.writeEnabled = writeEnabled;
+            },
         );
     }
 
@@ -154,7 +186,7 @@ export class LangsysServer {
 
         this.authorizing ??= this.api
             .authorize()
-            .then(({ status, keyType }) => {
+            .then(({ status, keyType, writeEnabled, batchLimit }) => {
                 if (!status) {
                     this.logger.error(
                         'Project authorization failed. Catalogs will not load and the page will ' +
@@ -164,6 +196,8 @@ export class LangsysServer {
                     return;
                 }
                 this.keyType = keyType;
+                this.writeEnabled = writeEnabled;
+                if (batchLimit !== undefined) this.batchLimit = batchLimit;
                 if (keyType === 'unknown') {
                     this.logger.warn(
                         'Project authorization succeeded but returned no recognisable key type. ' +
@@ -217,6 +251,12 @@ export class LangsysServer {
             projectId: this.projectId,
             baseLocale: this.baseLocale,
             logger: this.logger,
+            // Captured AFTER the catalog resolved, so a first render at a new locale acts
+            // on the capability that same response just reported rather than on the
+            // staler one authorize() left behind.
+            writeEnabled: this.writeEnabled,
+            keyType: this.keyType,
+            batchLimit: this.batchLimit,
             drained: false,
             draining: false,
             posted: 0,
@@ -225,7 +265,7 @@ export class LangsysServer {
         // Phrases discovered after the scheduled drain — a streamed body still rendering
         // after `run()` resolved — schedule their own drain rather than being dropped.
         scope.onLateMiss = () => {
-            scheduleDrain(() => drainMissQueue(scope, this.api, this.keyType, this.harvestEnabled));
+            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled));
         };
 
         // A render that throws must still harvest. Without the `finally`, a page that
@@ -236,7 +276,7 @@ export class LangsysServer {
         try {
             value = await runInScope(scope, async () => fn());
         } finally {
-            scheduleDrain(() => drainMissQueue(scope, this.api, this.keyType, this.harvestEnabled));
+            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled));
         }
 
         return { value, catalog, locale, missing: scope.missQueue, [SCOPE]: scope };
@@ -263,7 +303,7 @@ export class LangsysServer {
             return Promise.resolve();
         }
 
-        return drainMissQueue(scope, this.api, this.keyType, this.harvestEnabled);
+        return drainMissQueue(scope, this.api, this.harvestEnabled);
     }
 
     /**

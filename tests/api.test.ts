@@ -16,6 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { canonicalizeLocale } from 'langsys-js-typescript/pure';
 import { LangsysApi, DEFAULT_API_URL } from '../src/api.js';
 
 interface Captured {
@@ -102,11 +103,28 @@ describe('URL construction', () => {
         expect(new URL(calls[0].url).searchParams.get('project_id')).toBe('42');
     });
 
-    it('CANONICALIZES the locale in the query', async () => {
-        // `en_gb` and `en-GB` must not fetch two different cache entries upstream.
+    it('WIRE-3: sends lowercase xx-yy on the wire, whatever casing it was handed', async () => {
+        // This assertion used to require `en-GB`, transcribed from an early revision of
+        // WIRE-3 that mandated canonical BCP 47. The rule has been corrected four times
+        // since and now requires lowercase — which is what every locale in the database
+        // already is, what the middleware produces, and therefore the only form that
+        // behaves identically on a route that does NOT mount that middleware.
+        //
+        // 0.1.0 shipped the cased form and nothing here failed, because the assertion was
+        // written from the same wrong source as the code.
         const { api, calls } = makeApi(() => ok({ status: true, data: {} }));
         await api.getTranslations('en_gb');
-        expect(new URL(calls[0].url).searchParams.get('locale')).toBe('en-GB');
+        expect(new URL(calls[0].url).searchParams.get('locale')).toBe('en-gb');
+    });
+
+    it('WIRE-3: four spellings of one locale all reach the wire identically', () => {
+        // The point of the rule is not the casing, it is that `en-US` from a host
+        // application's locale store resolves to the same catalog entry as `en-us`
+        // rather than fetching twice. One assertion per spelling would pass against an
+        // implementation that normalised inconsistently.
+        const spellings = ['en_GB', 'en-GB', 'EN-gb', 'en-gb'];
+        const seen = new Set(spellings.map((s) => canonicalizeLocale(s)));
+        expect([...seen]).toEqual(['en-gb']);
     });
 
     it('puts the project id in the authorize path', async () => {

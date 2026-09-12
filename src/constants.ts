@@ -37,15 +37,42 @@
  * Nothing already in this list moves, so only blocks carrying one of the twelve re-key.
  * `derivations.ts` carries the read-side fallback for exactly that day.
  */
-export const TRANSLATABLE_ATTRIBUTES = [
+/**
+ * The twenty-seven translatable attributes, **in order**, re-exported from the core.
+ *
+ * Consumed from `langsys-js-typescript/pure` rather than restated here. Order is
+ * identity — `generateCustomId` hashes `JSON.stringify([category, tokens])`, so a
+ * set-equal but order-different array yields a different id for every block carrying
+ * two or more translatable attributes. A local copy is a second source of truth for a
+ * value whose whole purpose is to be identical across SDKs, and the way it fails is a
+ * silent re-key rather than an error.
+ *
+ * `tests/attribute-list-pin.test.ts` still pins it against an independently transcribed
+ * literal, so a reorder upstream breaks this build loudly instead of re-keying quietly.
+ */
+export { TRANSLATABLE_ATTRIBUTES } from 'langsys-js-typescript/pure';
+
+/**
+ * The fifteen attributes this package harvested before convergence.
+ *
+ * **Read-side only, and not a divergence.** Blocks registered before the twenty-seven
+ * landed were keyed from these fifteen, so `derivations.ts` reproduces that shape to
+ * find them. Nothing registers under it.
+ *
+ * Pinned as a literal rather than sliced from the twenty-seven. Slicing would track
+ * upstream, and the whole point of this list is that it does NOT — it records what was
+ * actually stored, which is a historical fact and cannot be re-derived from a list that
+ * has since changed. See CID-3: tolerate historical ids on lookup, never emit them.
+ */
+export const HISTORICAL_TRANSLATABLE_ATTRIBUTES_15 = [
     'placeholder',
     'alt',
     'title',
-    'label', // <option>, <optgroup>, <track> — the text a user reads in the picker
+    'label',
     'aria-label',
     'aria-placeholder',
     'aria-description',
-    'aria-valuetext', // the spoken value of a slider/meter
+    'aria-valuetext',
     'aria-roledescription',
     'data-error',
     'data-error-message',
@@ -53,27 +80,6 @@ export const TRANSLATABLE_ATTRIBUTES = [
     'data-invalid-message',
     'data-required-message',
     'data-pattern-message',
-] as const;
-
-/**
- * PHP's additional twelve, kept here as data rather than as prose so the read-side
- * fallback in `derivations.ts` can be built and tested before convergence lands.
- *
- * NOT part of the active list. Nothing registers under a derivation using these.
- */
-export const PHP_ONLY_TRANSLATABLE_ATTRIBUTES = [
-    'data-confirm',
-    'data-tooltip',
-    'data-title',
-    'data-content',
-    'data-original-title',
-    'data-bs-title',
-    'data-bs-content',
-    'data-loading-text',
-    'data-success-message',
-    'data-warning-message',
-    'data-empty-message',
-    'data-placeholder',
 ] as const;
 
 /** Elements whose `value` attribute carries user-visible text. */
@@ -140,32 +146,46 @@ export const PHRASE_MARKER_ATTRS_EMIT = ['data-langsys-phrase', 'data-ls-phrase'
  * fallback, so an existing catalog entry still resolves. Registration always uses the
  * corrected derivation.
  */
-export const SKIP_ELEMENTS = ['script', 'style', 'template'] as const;
+export { NON_TRANSLATABLE_ELEMENTS as SKIP_ELEMENTS } from 'langsys-js-typescript/pure';
 
 /*
- * Two elements that look like they belong above and do not:
+ * Consumed from the core rather than restated, for the same reason as the attribute
+ * list: it decides identity, and a second copy fails as a silent re-key.
  *
- * `<noscript>` is NOT skipped. Its content is user-visible — it renders whenever
- * scripting is off, and "Enable JavaScript to continue" is exactly the kind of string
- * that should be translated. It pattern-matches as technical, which is why it was in
- * this list in the first draft; the base SDK owner caught it. Measured: the DOM walker
- * yields ["Keep","Enable JS"] for `<p>Keep</p><noscript>Enable JS</noscript>`, and that
- * is correct behaviour, not a defect to mirror.
+ * `<noscript>` IS skipped, and this REVERSES what this file said until TOK-1 was
+ * rewritten on 2026-09-12. The old reasoning was that noscript text is user-visible —
+ * it renders whenever scripting is off — so excluding it would leave a real sentence
+ * permanently untranslated. That premise is true and it is not enough:
  *
- * `<template>` IS skipped, but not for the reason the others are. In a DOM, template
+ *   - With scripting OFF, no browser SDK is running, so nothing client-side could ever
+ *     have translated it. Only a server renderer could.
+ *   - With scripting ON, which is the HTML spec's default, a parser treats a noscript
+ *     body as RAW TEXT. Chromium and parse5 both yield the token
+ *     `<p>Enable JavaScript</p>` — a markup string. Registering that ships markup to
+ *     machine translation, which is the failure this family exists to prevent.
+ *   - Implementations cannot be made to agree cheaply. `langsys-php` runs libxml2, which
+ *     has NO scripting flag and parses noscript children as elements, so PHP derives
+ *     `Enable JavaScript` where the JS family derives the markup string. Same content,
+ *     two ids.
+ *
+ * Measured here, in headless Chromium 153 against the core's browser bundle: the JS
+ * family agrees on `68a99f77615d438ede3cdb21710f7826`, the scripting-disabled parsers on
+ * `e029887102428df850dbdef551c52eb4`. Excluding it makes every parser agree by
+ * construction. The cost is that a noscript fallback stays in the base language, which
+ * no client SDK could ever have translated anyway.
+ *
+ * `<template>` is skipped, but not for the reason the others are. In a DOM, template
  * content lives in a separate `DocumentFragment` on `HTMLTemplateElement.content`, so
  * `childNodes` is empty and the base SDK's walker finds nothing — it emits no tokens
- * without skipping anything. parse5 models this the same way (content hangs off
- * `node.content`, not `childNodes`), so this package ALREADY agrees with the DOM path
- * even with `skipCodeElements: false` — verified by execution, not assumed.
+ * without skipping anything. parse5 models this the same way, so this package ALREADY
+ * agreed with the DOM path even with `skipCodeElements: false` — verified by execution.
  *
  * The entry stays anyway, because that agreement is an accident of two parsers happening
  * to model the spec identically. A forgiving parser (`htmlparser2`) treats `<template>`
  * as an ordinary element and would harvest its contents — a divergence in the opposite
  * direction from the one this list exists for, and one no fixture would think to pin
- * because both sides "obviously" agree today. Listing it makes an accidental behaviour
- * intentional and parser-independent. Do not remove it as dead weight after testing only
- * in a browser.
+ * because both sides "obviously" agree today. Do not remove it as dead weight after
+ * testing only in a browser.
  */
 
 /** Catalog bucket for phrases registered with no category. */

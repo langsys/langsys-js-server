@@ -25,6 +25,15 @@ import type { Logger } from './logger.js';
 import type { KeyType, MissingPhrase } from './types.js';
 
 /**
+ * Registration batch size when the server advertises no usable cap (REG-9).
+ *
+ * Matches the JS core's `batchLimit` signal and `langsys-php`'s default. A default that
+ * disagreed across SDKs would mean the same page registers in different shapes depending
+ * on which SDK rendered it, and only the one exceeding the server's real cap would fail.
+ */
+export const DEFAULT_BATCH_LIMIT = 200;
+
+/**
  * Queue a miss on the CURRENT request's queue, deduplicated.
  *
  * The base SDK deduplicates with an O(n) linear scan per miss over an array that, under
@@ -63,11 +72,63 @@ export function queueMiss(scope: RequestScope, phrase: string, category: string)
  * the failure class this project keeps hitting: a check that produces no signal reads as
  * a pass. Logged unconditionally, once per process rather than once per phrase.
  */
-export function canHarvest(keyType: KeyType, enabled: boolean, logger: Logger): boolean {
+export function canHarvest(
+    writeEnabled: boolean | undefined,
+    keyType: KeyType,
+    enabled: boolean,
+    logger: Logger,
+): boolean {
     if (!enabled) {
         logger.warnOnce('harvest-disabled',
             'Harvesting is disabled by configuration. Phrases rendered on the server will ' +
                 'NOT self-register, so new copy will not appear in the Translation Manager.',
+        );
+        return false;
+    }
+
+    // GATE-1 — the server's answer, and it is the ONLY thing that decides. `key_type`
+    // describes the key; capability describes the session. The same `ip_write` key is
+    // write-capable from an allow-listed address and read-only from anywhere else, so no
+    // client-side value can express this.
+    if (writeEnabled === true) return true;
+
+    if (writeEnabled === false) {
+        // OBS-1 — a refusal on a key whose whole point is writing is otherwise completely
+        // silent: no request, no error, nothing in the catalog. The integrator believes
+        // they are integrated and has nothing to report. One line is the only signal
+        // available on a server, where there is no network tab to inspect.
+        if (keyType === 'write' || keyType === 'ip_write') {
+            logger.warnOnce('harvest-capability-refused',
+                `Harvesting is off because the server answered write_enabled: false for this ` +
+                    `session, on a "${keyType}" key. Server-rendered phrases will NOT ` +
+                    'self-register. For an ip_write key this usually means this server\'s ' +
+                    'outbound address is not on the project allow-list — the key is fine and ' +
+                    'the address is what needs changing.',
+            );
+        } else {
+            logger.warnOnce('harvest-capability-read',
+                'Harvesting is off because the server answered write_enabled: false for this ' +
+                    'session. Server-rendered phrases will NOT self-register. This is the ' +
+                    'correct and intended configuration for production.',
+            );
+        }
+        return false;
+    }
+
+    // GATE-8 — the field is ABSENT, so this response came from a server predating the
+    // capability. Falling back to `key_type` is sanctioned here and ONLY here, and only
+    // for the plain `write` arm below. Nothing latches: this is re-derived from whatever
+    // the most recent response said, so a server upgraded mid-deployment is picked up
+    // without an SDK release.
+    if (keyType === 'ip_write') {
+        // Constraint 1. The decision for an address-dependent key is address-dependent,
+        // and the absence of a positive signal IS the answer. Inferring around it is what
+        // converts a closed gate into an open one.
+        logger.warnOnce('harvest-ip-write-unknown',
+            'Harvesting is off because this server did not report write_enabled and the key ' +
+                'is ip_write, whose capability depends on the calling address. That cannot be ' +
+                'inferred locally, so it is refused rather than guessed. Upgrade the Langsys ' +
+                'API to a version that reports write_enabled.',
         );
         return false;
     }
@@ -112,7 +173,6 @@ export function canHarvest(keyType: KeyType, enabled: boolean, logger: Logger): 
 export async function drainMissQueue(
     scope: RequestScope,
     api: LangsysApi,
-    keyType: KeyType,
     enabled: boolean,
 ): Promise<void> {
     // A concurrency guard, not a once-only latch. `run()` schedules a drain and the
@@ -126,7 +186,9 @@ export async function drainMissQueue(
         return;
     }
 
-    if (!canHarvest(keyType, enabled, scope.logger)) {
+    // Read from the scope, not from a parameter threaded down from the server instance:
+    // this is the decision that was true when THIS request started rendering.
+    if (!canHarvest(scope.writeEnabled, scope.keyType, enabled, scope.logger)) {
         // Mark the batch consumed. Otherwise every late miss re-triggers a drain that
         // refuses again, turning a read-only key into a scheduling loop.
         scope.posted = scope.missQueue.length;
@@ -145,18 +207,42 @@ export async function drainMissQueue(
     // Advance BEFORE awaiting, so a late miss arriving mid-flight cannot be posted twice.
     scope.posted += batch.length;
 
+    // REG-9 — chunk to the server's cap, which it ENFORCES: an oversized batch is
+    // rejected outright, so exceeding it does not send a big request, it loses every
+    // phrase in it. REG-7 — sequential, so only one send is ever in flight.
+    let sent = 0;
+    // Clamped at the LOOP as well as at the reader, and this is defence in depth rather
+    // than belt-and-braces: a stride of 0 does not produce a wrong batch, it never
+    // advances `offset`, so the drain spins forever inside a `setImmediate` callback and
+    // pins a core with no error and no request in flight to blame. Found by mutating the
+    // reader's `>= 1` guard away — the mutation did not fail the suite, it HUNG it, which
+    // is how the same regression would present in production.
+    const stride = Math.max(1, Math.floor(scope.batchLimit) || 1);
     try {
-        const response = await api.createTranslatableItems(items);
-        if (!response.status) {
-            // Fire-and-forget is about not blocking the response. It is not about
-            // discarding the outcome — a harvest that silently fails looks identical to
-            // one that succeeded, and the phrases just never appear.
-            scope.logger.error(`Failed to register ${items.length} phrase(s)`, response.errors);
-            return;
+        for (let offset = 0; offset < items.length; offset += stride) {
+            const chunk = items.slice(offset, offset + stride);
+            const response = await api.createTranslatableItems(chunk);
+            if (!response.status) {
+                // Fire-and-forget is about not blocking the response. It is not about
+                // discarding the outcome — a harvest that silently fails looks identical
+                // to one that succeeded, and the phrases just never appear.
+                //
+                // Stop rather than continue: the remaining chunks are going to the same
+                // endpoint that just refused, and hammering it turns one failed batch
+                // into a burst. Report what actually landed, not what was collected.
+                scope.logger.error(
+                    `Failed to register ${chunk.length} phrase(s)` +
+                        (sent > 0 ? ` after ${sent} already registered` : '') +
+                        `; ${items.length - sent - chunk.length} more not attempted`,
+                    response.errors,
+                );
+                return;
+            }
+            sent += chunk.length;
         }
-        scope.logger.log(`Registered ${items.length} phrase(s) for "${scope.locale}"`);
+        scope.logger.log(`Registered ${sent} phrase(s) for "${scope.locale}"`);
     } catch (err) {
-        scope.logger.error(`Failed to register ${items.length} phrase(s)`, err);
+        scope.logger.error(`Failed to register ${items.length - sent} phrase(s)`, err);
     } finally {
         scope.draining = false;
         scope.drained = true;

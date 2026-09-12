@@ -64,7 +64,15 @@ const CATALOG: Catalog = { __uncategorized__: { Hello: 'Ciao' } };
  */
 const NORMALIZED = normalizeCatalog(CATALOG);
 
-function makeApi(opts: { catalog?: Catalog; status?: boolean; delayMs?: number; throws?: boolean } = {}) {
+function makeApi(
+    opts: {
+        catalog?: Catalog;
+        status?: boolean;
+        delayMs?: number;
+        throws?: boolean;
+        projectId?: string | number;
+    } = {},
+) {
     const fetches: string[] = [];
     const fetchImpl = (async (url: string | URL) => {
         const href = String(url);
@@ -77,7 +85,10 @@ function makeApi(opts: { catalog?: Catalog; status?: boolean; delayMs?: number; 
         );
     }) as unknown as typeof globalThis.fetch;
 
-    return { api: new LangsysApi('p', 'k', 'https://example.test/api', fetchImpl), fetches };
+    return {
+        api: new LangsysApi(opts.projectId ?? 'p', 'k', 'https://example.test/api', fetchImpl),
+        fetches,
+    };
 }
 
 const logger = () => createLogger(false);
@@ -95,6 +106,96 @@ describe('the harness itself', () => {
         const store = new CatalogStore(api, logger(), 300);
         expect(await store.get('it')).toEqual(NORMALIZED);
         expect(fetches).toHaveLength(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+describe('CACHE-1 — keys are namespaced by project', () => {
+    /**
+     * The spec's own framing: "an unnamespaced key is invisible until two projects share
+     * a backing store." Nothing in-process catches this, because the process memo is an
+     * instance field — it takes the shared tier, which is the deployment the shared tier
+     * exists for. Measured against 0.1.0: project B was served project A's catalog.
+     *
+     * A wrong value cached in a browser harms one user. The same value cached here is
+     * served to every visitor of the wrong tenant until the TTL expires — and it does not
+     * look like a bug, it looks like someone else's copy.
+     */
+    const ALPHA: Catalog = { __uncategorized__: { Hello: 'ALPHA-COPY' } };
+    const BETA: Catalog = { __uncategorized__: { Hello: 'BETA-COPY' } };
+
+    it('does not serve one project the other\'s catalog through a shared cache', async () => {
+        const shared = makeSharedCache();
+        const a = makeApi({ projectId: 'alpha', catalog: ALPHA });
+        const b = makeApi({ projectId: 'beta', catalog: BETA });
+        const storeA = new CatalogStore(a.api, logger(), 300, shared.cache);
+        const storeB = new CatalogStore(b.api, logger(), 300, shared.cache);
+
+        await storeA.get('it');
+        const fromB = await storeB.get('it');
+
+        // Both halves matter. The value assertion is the user-visible harm; the fetch
+        // assertion is what proves B actually went to the API rather than being handed a
+        // cache hit that happened to look right.
+        expect(fromB).toEqual(normalizeCatalog(BETA));
+        expect(b.fetches).toHaveLength(1);
+    });
+
+    it('writes a key carrying the project id', async () => {
+        const shared = makeSharedCache();
+        const { api } = makeApi({ projectId: 'alpha' });
+        await new CatalogStore(api, logger(), 300, shared.cache).get('it');
+
+        const keys = [...shared.store.keys()];
+        expect(keys).toHaveLength(1);
+        expect(keys[0]).toContain('alpha');
+    });
+
+    it('POSITIVE CONTROL: one project still reads its OWN cached catalog', async () => {
+        // Without this, "B fetched its own" is satisfiable by a key so unique that
+        // nothing ever hits the cache at all — which would pass the test above while
+        // silently disabling the shared tier.
+        const shared = makeSharedCache();
+        const { api, fetches } = makeApi({ projectId: 'alpha', catalog: ALPHA });
+        const store = new CatalogStore(api, logger(), 300, shared.cache);
+
+        await store.get('it');
+        const second = await store.get('it');
+
+        expect(second).toEqual(normalizeCatalog(ALPHA));
+        expect(fetches).toHaveLength(1);
+    });
+
+    it('separates two projects that share a locale AND a cache, in both directions', async () => {
+        const shared = makeSharedCache();
+        const a = makeApi({ projectId: 1, catalog: ALPHA });
+        const b = makeApi({ projectId: 2, catalog: BETA });
+        const storeA = new CatalogStore(a.api, logger(), 300, shared.cache);
+        const storeB = new CatalogStore(b.api, logger(), 300, shared.cache);
+
+        // B first this time: a fix that only namespaces on write would pass one order
+        // and fail the other.
+        expect(await storeB.get('it')).toEqual(normalizeCatalog(BETA));
+        expect(await storeA.get('it')).toEqual(normalizeCatalog(ALPHA));
+        expect(shared.store.size).toBe(2);
+    });
+
+    it('invalidate() drops only the calling project\'s entry', async () => {
+        const shared = makeSharedCache();
+        const a = makeApi({ projectId: 'alpha', catalog: ALPHA });
+        const b = makeApi({ projectId: 'beta', catalog: BETA });
+        const storeA = new CatalogStore(a.api, logger(), 300, shared.cache);
+        const storeB = new CatalogStore(b.api, logger(), 300, shared.cache);
+
+        await storeA.get('it');
+        await storeB.get('it');
+        await storeA.invalidate('it');
+
+        // A re-fetches, B does not: the invalidation was scoped to A.
+        await storeA.get('it');
+        await storeB.get('it');
+        expect(a.fetches).toHaveLength(2);
+        expect(b.fetches).toHaveLength(1);
     });
 });
 

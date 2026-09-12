@@ -348,16 +348,17 @@ The Langsys SDK family has a documented, recurring failure class:
 
 Concretely, in this repo:
 
-- **The vendored pure functions are extracted, not transcribed.** `_dev_/vendor-pure.sh`
-  pulls `md5`, `md5Legacy`, `canonicalizeLocale` and the whole ICU interpolation cluster
-  verbatim out of the published npm tarball at a pinned version, then **executes** them
-  against the real package and requires the outputs to match. (`generateCustomId` is the
-  one-line `md5(JSON.stringify([category, tokens]))` wrapper, written in the script's
-  footer rather than extracted — it is asserted against the published package like
-  everything else.) A divergent `md5` would re-key every catalog entry this package
-  writes, and hand-transcribing 117 lines of bit manipulation is exactly where that
-  divergence would enter. `tests/conformance/vendor-parity.test.ts` re-checks all of it
-  against the installed package on every run.
+- **The identity functions are imported, not reimplemented.** `md5`, `canonicalizeLocale`,
+  `interpolate`, `normalizeTokenText`, `TRANSLATABLE_ATTRIBUTES` and the element exclusion
+  list all come from `langsys-js-typescript/pure`, the core's side-effect-free subpath.
+  They used to be *vendored* — extracted verbatim from the published tarball by a script,
+  because importing the core's main entry instantiated its whole singleton graph inside
+  the server process. That copy drifted: it was pinned at `0.6.5` while the core moved on,
+  and it is why `0.1.0` sent `locale=de-DE` on the wire where the contract wanted
+  `de-de`. A frozen copy of a moving contract is a slow divergence, and the subpath
+  removed the reason to keep one. The two cross-SDK fixtures — `langsys-php`'s
+  `custom-id-reference.json` and the core's `canonicalization-reference.json` — are
+  asserted in place on every run, cited by blob.
 - **The tokenizer is differentially tested against the published DOM walker**, not against
   fixtures written from the same memory as the implementation. 52 HTML cases plus 2
   asserted divergences, each checked for both the token *array* (order is identity) and

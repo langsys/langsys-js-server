@@ -13,8 +13,17 @@ export interface CatalogCategory {
 
 export type Catalog = Record<string, CatalogCategory>;
 
-/** Discovered from the authorize response, never configured. */
-export type KeyType = 'read' | 'write' | 'unknown';
+/**
+ * Discovered from the authorize response, never configured.
+ *
+ * `ip_write` is recognised rather than folded into `unknown` so its refusal can say
+ * something true. It is a legitimate key type whose capability is address-dependent —
+ * telling its owner "no recognisable key type, authorization probably failed" would send
+ * them to debug the wrong thing.
+ *
+ * This type never decides whether to write. See `write_enabled` and GATE-1.
+ */
+export type KeyType = 'read' | 'write' | 'ip_write' | 'unknown';
 
 export interface LangsysServerConfig {
     projectId: string | number;

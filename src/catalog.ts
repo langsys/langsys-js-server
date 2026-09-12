@@ -18,8 +18,8 @@
  * to a question it has not faced.
  */
 
-import { LangsysApi } from './api.js';
-import { canonicalizeLocale } from './vendor/pure.js';
+import { LangsysApi, readWriteEnabled } from './api.js';
+import { canonicalizeLocale } from 'langsys-js-typescript/pure';
 import { UNCATEGORIZED } from './constants.js';
 import type { Logger } from './logger.js';
 import type { Catalog, SharedCache } from './types.js';
@@ -92,10 +92,40 @@ export class CatalogStore {
         private readonly logger: Logger,
         private readonly ttlSeconds: number = DEFAULT_TTL_SECONDS,
         private readonly sharedCache?: SharedCache,
+        /**
+         * Called with the `write_enabled` carried on a successful catalog response's
+         * ENVELOPE.
+         *
+         * This is how GATE-8's "re-evaluated per response, never latched at init" is
+         * actually satisfied: a catalog fetch already happens once per locale per TTL, so
+         * the capability is refreshed on a response the SDK was making anyway — no extra
+         * round-trip, and a server that gains the field mid-deployment is picked up
+         * without an SDK release.
+         *
+         * Only ever called when the flag is PRESENT. An absent flag here does not erase a
+         * positive answer from `authorize()`: absence is a statement about the server's
+         * version, and the server that omits it on this endpoint would have omitted it on
+         * that one too. Letting absence overwrite `true` would silently close the gate on
+         * exactly the `ip_write` key discovery depends on.
+         */
+        private readonly onCapability?: (writeEnabled: boolean) => void,
     ) {}
 
+    /**
+     * CACHE-1: every key carries the project id, plus the locale, which is the only other
+     * thing that changes the answer.
+     *
+     * Without the project id this is invisible until two projects share a backing store —
+     * and then it is not a subtle bug: the second project's visitors are served the
+     * first's copy for a full TTL, fleet-wide on shared Redis. The process memo hides it,
+     * because that is an instance field; it takes the shared tier to surface, which is
+     * precisely the deployment the shared tier exists for.
+     *
+     * Read off `api.projectId` rather than taking a second constructor argument, so the
+     * id in the key cannot drift from the id on the wire.
+     */
     private key(locale: string): string {
-        return `langsys:catalog:${canonicalizeLocale(locale)}`;
+        return `langsys:catalog:${this.api.projectId}:${canonicalizeLocale(locale)}`;
     }
 
     async get(locale: string): Promise<Catalog> {
@@ -175,6 +205,13 @@ export class CatalogStore {
         try {
             const response = await this.api.getTranslations(locale);
             if (response.status && response.data) {
+                // Read the capability off the ENVELOPE before anything is cached, and
+                // cache only the body. That ordering is GATE-4 for this endpoint: the
+                // flag describes the session, the body describes the project, and only
+                // the second may outlive the request.
+                const capability = readWriteEnabled(response);
+                if (capability !== undefined) this.onCapability?.(capability);
+
                 catalog = normalizeCatalog(response.data);
             } else {
                 // Fire-and-forget on the harvest side, but NOT here: a failed catalog

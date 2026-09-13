@@ -427,3 +427,66 @@ describe('TOK-3 — the spec vector, proven on both paths', () => {
         );
     });
 });
+
+describe('ICU-1 on the block path — a block carrying ICU renders it with no params, on every path', () => {
+    /**
+     * `langsys-js-typescript` `ff57476` made `<Translate>` render ICU tokens with no params —
+     * their `other` branch, `#` as `{argName}` — at the base locale too, where its walk used to
+     * be skipped. A server block still returning the raw source would disagree with that on
+     * every such block, so these pin the block path before `t()` changes. The vectors mirror
+     * that commit's `tests/icu-no-params.test.ts`, their lane's expectations.
+     *
+     * The hazard TS measured on its own path — params applied to `t()`'s RESULT, collapsing a
+     * select to `other` before they arrive — cannot arise here: `renderTranslateBlock` takes no
+     * params, and nothing in `src/` interpolates `t()`'s output.
+     */
+    const SELECT = '{g, select, male {He} female {She} other {They}} left';
+    const PLURAL = '{count, plural, one {# item} other {# items}}';
+    const rendered = async (html: string, opts: { locale?: string; catalog?: Record<string, unknown> } = {}) => {
+        const { run } = serve((opts.catalog ?? {}) as Catalog, { locale: opts.locale ?? 'en' });
+        return (await run(() => renderTranslateBlock(html))).value.html;
+    };
+
+    it('a single-token block at the base locale renders the other branch', async () => {
+        expect(await rendered(`<p>${SELECT}</p>`)).toBe('<p>They left</p>');
+    });
+
+    it('a multi-token block at the base locale renders the recovered plural', async () => {
+        expect(await rendered(`<p>${PLURAL}</p><span>tail</span>`)).toBe('<p>{count} items</p><span>tail</span>');
+    });
+
+    it('an ICU attribute value renders its other branch', async () => {
+        expect(await rendered(`<p>Profile</p><img alt="${SELECT}">`)).toBe('<p>Profile</p><img alt="They left">');
+    });
+
+    it('on a catalog hit, the translated ICU renders its other branch', async () => {
+        const html = `<p>${SELECT}</p><span>tail</span>`;
+        const catalog = {
+            __uncategorized__: {
+                [blockId(html, '')]: { [SELECT]: '{g, select, male {Lui} female {Lei} other {Loro}} è uscito', tail: 'coda' },
+            },
+        };
+        expect(await rendered(html, { locale: 'it', catalog })).toBe('<p>Loro è uscito</p><span>coda</span>');
+    });
+
+    it('a registered block whose ICU token is still untranslated renders the source ICU, recovered', async () => {
+        const html = `<p>${SELECT}</p><span>tail</span>`;
+        const catalog = { __uncategorized__: { [blockId(html, '')]: { [SELECT]: null, tail: 'coda' } } };
+        expect(await rendered(html, { locale: 'it', catalog })).toBe('<p>They left</p><span>coda</span>');
+    });
+
+    it('outside a request scope too, as t() does', () => {
+        expect(renderTranslateBlock(`<p>${SELECT}</p>`).html).toBe('<p>They left</p>');
+    });
+
+    it('CONTROL: a block with no ICU at the base locale is left exactly as written', async () => {
+        const html = "<p>Hello {name}</p><p>Don't   stop, 50% {off</p><span>tail</span>";
+        expect(await rendered(html)).toBe(html);
+    });
+
+    it('CONTROL: beside an ICU token, plain text keeps its own internal whitespace', async () => {
+        // A token is whitespace-collapsed; the node is not. Writing a token back where the
+        // rendering did not change it would silently rewrite "Hello   there".
+        expect(await rendered(`<p>${PLURAL}</p><p>Hello   there</p>`)).toBe('<p>{count} items</p><p>Hello   there</p>');
+    });
+});

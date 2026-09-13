@@ -181,21 +181,25 @@ describe.skipIf(!corePresent)('langsys-js-typescript canonicalization-reference.
  * server cores broke with a correct renderer underneath. So each row renders through
  * `run()` + `t()` in its own locale, exactly as an integrator's call would.
  *
- * Pinned provenance: blob `d369bd185ca284ba75843431e4302c08628f2245`, written by `5403824`
- * ("Add interpolation reference fixtures, the third cross-SDK contract"); the core vendors
- * the same blob.
+ * Pinned provenance: blob `725e7908ffacb63a7f93efdcd5fae893d800e659`, written by `4c51eae`
+ * ("Cover interpolation called with no params, and run the shared vectors through
+ * translate()"), which added four rows — a select and a plural, each called with no params and
+ * with an empty map. The first 19 are byte-identical to `d369bd18` (`5403824`), the blob the
+ * core vendors. Before those four, no row in any lane called interpolation without params,
+ * which is how the no-params short-circuit passed every lane's fixture.
  */
 const PHP_INTERPOLATION_FIXTURE = new URL(
     '../../../langsys-php-sdk/tests/fixtures/interpolation-reference.json',
     import.meta.url,
 );
-const PHP_INTERPOLATION_FIXTURE_BLOB = 'd369bd185ca284ba75843431e4302c08628f2245';
+const PHP_INTERPOLATION_FIXTURE_BLOB = '725e7908ffacb63a7f93efdcd5fae893d800e659';
 const interpolationPresent = existsSync(PHP_INTERPOLATION_FIXTURE);
 
 interface InterpolationRow {
     description: string;
     template: string;
-    params: Record<string, unknown>;
+    /** Absent on the no-params rows: the call carries no argument at all. */
+    params?: Record<string, unknown>;
     locale: string;
     expected: string;
 }
@@ -219,7 +223,7 @@ describe('langsys-php-sdk interpolation-reference.json, through this package\'s 
         const raw = readFileSync(PHP_INTERPOLATION_FIXTURE);
         const blob = createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex');
         expect(blob).toBe(PHP_INTERPOLATION_FIXTURE_BLOB);
-        expect(interpolationRows).toHaveLength(19);
+        expect(interpolationRows).toHaveLength(23);
     });
 
     it.each(interpolationRows.map((r) => [r.description, r] as const))('%s', async (_d, row) => {
@@ -236,7 +240,12 @@ describe('langsys-php-sdk interpolation-reference.json, through this package\'s 
                     headers: { 'content-type': 'application/json' },
                 })) as unknown as typeof globalThis.fetch,
         });
-        const rendered = await langsys.run({ locale: row.locale }, () => t(row.template, row.params as never));
+        // A row with no `params` key is a call with NO argument — not `undefined`, not `{}` —
+        // because that call shape is exactly what those rows exist to cover.
+        const noParams = !('params' in row);
+        const rendered = await langsys.run({ locale: row.locale }, () =>
+            noParams ? t(row.template) : t(row.template, row.params as never),
+        );
         expect(rendered.value).toBe(row.expected);
     });
 });

@@ -71,7 +71,9 @@ export const t: TFunction = (
         //
         // There is no request logger here, by definition. `console.warn` directly.
         warnOnceGlobal(CONSOLE_LOGGER, 'no-scope', NO_SCOPE_MESSAGE);
-        return params ? interpolate(phrase, params, undefined) : phrase;
+        // ICU-1: interpolated with or without params — `{}`, never `undefined`, which the
+        // core's `interpolate` throws on. See the in-scope return below.
+        return interpolate(phrase, params ?? {}, undefined);
     }
 
     const bucket = scope.catalog[category || UNCATEGORIZED];
@@ -106,7 +108,12 @@ export const t: TFunction = (
         queueMiss(scope, phrase, category);
     }
 
-    if (!params) return translated;
+    // ICU-1: a phrase carrying ICU renders its `other` branch with no params, never its raw
+    // source. Returning early here did exactly that on every path, and the client core did the
+    // same until `langsys-js-typescript` `ff57476`. The two moved together, because a server
+    // rendering `other` while the first client render shows the source is a hydration mismatch.
+    // Plain text comes back from `interpolate` exactly as written.
+    if (!params) return interpolate(translated, {}, scope.locale);
 
     // Re-issue the base SDK's unmatched-param warning against the REQUEST's logger. The
     // vendored `warnUnmatchedParams` reads a module-global `debugEnabled` this package

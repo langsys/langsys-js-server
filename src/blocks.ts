@@ -20,9 +20,9 @@
  */
 
 import { serialize } from 'parse5';
-import { generateCustomId } from 'langsys-js-typescript/pure';
+import { generateCustomId, interpolate, isICU } from 'langsys-js-typescript/pure';
 import { deriveBlockIdentity } from './derivations.js';
-import { collectSlots, tokenizeHtml } from './tokenizer.js';
+import { collectSlots, tokenizeHtml, type TokenSlot } from './tokenizer.js';
 import { getScope } from './context.js';
 import { queueMiss } from './harvest.js';
 import { CONTENT_BLOCK_MARKER_EMIT, UNCATEGORIZED } from './constants.js';
@@ -71,6 +71,35 @@ export class UncapturableChildError extends Error {
 }
 
 /**
+ * Write each slot's rendering back, ICU included (ICU-1).
+ *
+ * The client core's `<Translate>` renders a token carrying ICU with no params — its `other`
+ * branch, `#` as `{argName}` — at the base locale, on a catalog hit and on the fallback alike
+ * (`langsys-js-typescript` `ff57476`). A server block returning the raw source would disagree
+ * with the first client render on every such block.
+ *
+ * Two properties are deliberate. Only text `isICU` recognises reaches `interpolate`, so prose is
+ * never reformatted. And a slot is written only when there is something to write — a
+ * translation, or ICU that rendered differently — because a token is whitespace-collapsed and
+ * its node is not: writing an unchanged token back would silently rewrite `Hello   there`.
+ */
+function renderSlots(
+    slots: readonly TokenSlot[],
+    block: Record<string, unknown> | undefined,
+    locale: string | undefined,
+): void {
+    for (const slot of slots) {
+        const translated = block?.[slot.token];
+        // CAT-2: the value decides display. `null` (registered, translation running) and
+        // `''` both fall back to the source token rather than blanking the copy.
+        const hit = typeof translated === 'string' && translated.length > 0;
+        const raw = hit ? (translated as string) : slot.token;
+        const text = isICU(raw) ? interpolate(raw, {}, locale) : raw;
+        if (hit || text !== slot.token) slot.apply(text);
+    }
+}
+
+/**
  * Resolve one `<Translate>` block against the current request's catalog.
  *
  * Returns the translated inner HTML and the id it resolved under. The caller stamps that
@@ -84,10 +113,17 @@ export function renderTranslateBlock(innerHtml: string, category = ''): Rendered
     const identity = deriveBlockIdentity(innerHtml, category);
     const missing: MissingPhrase[] = [];
 
+    // Only a block carrying ICU needs a pass without a catalog answer; anything else is
+    // returned exactly as written, byte for byte.
+    const carriesIcu = tokens.some((token) => isICU(token));
+
     if (!scope) {
         // Same posture as `t()`: never throw for a missing scope, because the correct
-        // degraded output is the source content and a 500 is strictly worse.
-        return { html: innerHtml, customId: identity.primary.id, missing, known: false };
+        // degraded output is the source content and a 500 is strictly worse. ICU still
+        // renders, as it does from `t()` out of scope.
+        if (!carriesIcu) return { html: innerHtml, customId: identity.primary.id, missing, known: false };
+        renderSlots(slots, undefined, undefined);
+        return { html: serialize(fragment), customId: identity.primary.id, missing, known: false };
     }
 
     const bucket = scope.catalog[category || UNCATEGORIZED];
@@ -126,18 +162,19 @@ export function renderTranslateBlock(innerHtml: string, category = ''): Rendered
         missing.push(...[...new Set(tokens)].map((phrase) => ({ phrase, category })));
     }
 
-    if (!block) return { html: innerHtml, customId: identity.primary.id, missing, known };
+    if (!block) {
+        // A miss, or the base locale. Rendered only when there is ICU to render (ICU-1); the
+        // client core skips this pass for the same blocks.
+        if (!carriesIcu) return { html: innerHtml, customId: identity.primary.id, missing, known };
+        renderSlots(slots, undefined, scope.locale);
+        return { html: serialize(fragment), customId: identity.primary.id, missing, known };
+    }
 
     // Each slot writes back to exactly where its token came from. There is no index to
     // fall out of step: a text node, an attribute, a button value each receive their own
     // translation, and excluded, phrase-marked and code subtrees yield no slot at all, so
     // they are left intact.
-    for (const slot of slots) {
-        const translated = block[slot.token];
-        // CAT-2: the value decides display. `null` (registered, translation running) and
-        // `''` both fall back to source text rather than blanking the copy.
-        if (typeof translated === 'string' && translated.length > 0) slot.apply(translated);
-    }
+    renderSlots(slots, block, scope.locale);
 
     return { html: serialize(fragment), customId: identity.primary.id, missing, known };
 }

@@ -408,47 +408,27 @@ describe('ICU-1/2/3/5 — recovery through THIS package\'s t(), on every path', 
         expect(await inScope(() => prose.map((p) => t(p)))).toEqual(prose);
     });
 
-    describe('ICU-1 GAP — with NO params, t() skips interpolation, matching the client core until both move', () => {
-        /**
-         * **A gap recorded as a gap, with tests that flip when it closes.** ICU-1 says a missing
-         * argument renders `other`. With no params at all, `t()` returns the raw ICU source on
-         * every path below — measured. The client core does the same, executed at
-         * `langsys-js-typescript` `a18e4a3`: `Translations.t(select)` returns the source, and
-         * `<Translate>`'s `applyParams` returns early on empty params. An empty map interpolates
-         * on both sides, which is why the tests above pass.
-         *
-         * **Not fixed here first, deliberately.** Served HTML rendering `other` while the first
-         * client render shows the raw source is a hydration mismatch on every such string — the
-         * `<noscript>` and `<math>` ordering again: core first, then here. This side's fix is two
-         * lines, passing `params ?? {}` on both returns (the core's `interpolate` throws on
-         * `undefined`), and applying it turns exactly these five red. When the core ships its
-         * half, flip each to the value in its message and regrade ICU-1 and ICU-3.
-         */
-        const FLIP = (fixed: string) =>
-            `t() now interpolates with no params. That is only correct once the client core does too; ` +
-            `then expect ${JSON.stringify(fixed)} and regrade ICU-1 and ICU-3.`;
+    // Held core-first until `langsys-js-typescript` `ff57476` shipped the client half, then
+    // flipped together: with no params at all, t() renders ICU on every path.
+    it('ICU-1: a select with NO params at all renders its other branch, not the ICU source', async () => {
+        expect(await inScope(() => t(SELECT))).toBe('They left');
+    });
 
-        it('a select with no params returns the ICU source (fixed: its other branch)', async () => {
-            expect(await inScope(() => t(SELECT)), FLIP('They left')).toBe(SELECT);
-        });
+    it('ICU-1: the category overload with no params takes the same path', async () => {
+        expect(await inScope(() => t(SELECT, 'cat'))).toBe('They left');
+    });
 
-        it('the category overload with no params, the same', async () => {
-            expect(await inScope(() => t(SELECT, 'cat')), FLIP('They left')).toBe(SELECT);
-        });
+    it('ICU-1 + ICU-3: a plural with no params keeps the sentence and shows {count}, not a number', async () => {
+        expect(await inScope(() => t(PLURAL))).toBe('{count} items');
+    });
 
-        it('a plural with no params returns the source (fixed: {count} items)', async () => {
-            expect(await inScope(() => t(PLURAL)), FLIP('{count} items')).toBe(PLURAL);
-        });
+    it('ICU-1 on a catalog HIT, not only on the fallback phrase', async () => {
+        const catalog = { __uncategorized__: { [SELECT]: '{g, select, male {Lui} female {Lei} other {Loro}} è uscito' } };
+        expect(await inScope(() => t(SELECT), 'en', 'it', catalog)).toBe('Loro è uscito');
+    });
 
-        it('on a catalog hit, the translation comes back as ICU source (fixed: its other branch)', async () => {
-            const translated = '{g, select, male {Lui} female {Lei} other {Loro}} è uscito';
-            const catalog = { __uncategorized__: { [SELECT]: translated } };
-            expect(await inScope(() => t(SELECT), 'en', 'it', catalog), FLIP('Loro è uscito')).toBe(translated);
-        });
-
-        it('outside a request scope, the same', () => {
-            vi.spyOn(console, 'warn').mockImplementation(() => {});
-            expect(t(SELECT), FLIP('They left')).toBe(SELECT);
-        });
+    it('ICU-1 outside a request scope, where t() takes a separate return', () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(t(SELECT)).toBe('They left');
     });
 });

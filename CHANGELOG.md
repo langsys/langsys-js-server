@@ -50,6 +50,10 @@ whose markup carries none of the listed constructs keep the ids they had.
   no translations) is unaffected and still registers — that distinction is the whole fix.
 - **Locales go out lowercase** (WIRE-3). `0.1.0` sent `locale=de-DE` and cached under
   `langsys:catalog:es-CR`; the contract is `de-de`. Came in with the `/pure` swap.
+- **An empty `204` success is a success** (WIRE-2). `send()` JSON-parsed every `ok`
+  response, so a `204` with no body threw `SyntaxError: Unexpected end of JSON input` and a
+  registration the server had accepted was logged as `Failed to register`. It now branches
+  on status before parsing.
 
 ### Changed
 
@@ -80,6 +84,13 @@ Everything here can move a `custom_id`:
   entry. Harmless: catalogs are TTL'd and re-fetched, nothing durable is keyed on them.
 - `KeyType` gains `ip_write`, so a refusal on that key type can say something true instead
   of reporting an undetermined key.
+- **A failed registration backs off, per server instance** (REG-8). After a failed or
+  thrown send, nothing is sent for 3s, doubling on each consecutive failure to a 300s
+  ceiling and resetting on the first success. A render inside the window drops its misses
+  with one warning per window, and they register the next time they render after it. The
+  clock belongs to each `createLangsysServer()` instance, so one project's failing key never
+  throttles another's. Failed phrases are still **not** retained across requests — that
+  half of REG-8 is held for a spec ruling.
 
 ### Removed
 

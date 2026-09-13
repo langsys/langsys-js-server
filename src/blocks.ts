@@ -19,18 +19,14 @@
  * the singleton graph this package exists to avoid.
  */
 
-import { parseFragment, serialize } from 'parse5';
-import type { DefaultTreeAdapterMap } from 'parse5';
+import { serialize } from 'parse5';
 import { generateCustomId } from 'langsys-js-typescript/pure';
 import { deriveBlockIdentity } from './derivations.js';
-import { tokenizeHtml } from './tokenizer.js';
+import { collectSlots, tokenizeHtml } from './tokenizer.js';
 import { getScope } from './context.js';
 import { queueMiss } from './harvest.js';
-import { CONTENT_BLOCK_MARKER_EMIT, SKIP_ELEMENTS, UNCATEGORIZED } from './constants.js';
+import { CONTENT_BLOCK_MARKER_EMIT, UNCATEGORIZED } from './constants.js';
 import type { MissingPhrase } from './types.js';
-
-type Node = DefaultTreeAdapterMap['childNode'];
-type Element = DefaultTreeAdapterMap['element'];
 
 /** The result of rendering one content block server-side. */
 export interface RenderedBlock {
@@ -74,49 +70,6 @@ export class UncapturableChildError extends Error {
     }
 }
 
-const isElement = (n: Node): n is Element => 'tagName' in n;
-const isText = (n: Node): n is DefaultTreeAdapterMap['textNode'] => n.nodeName === '#text';
-const hasChildren = (n: Node): n is Element => 'childNodes' in n;
-
-/**
- * Replace each token's text in place, in the same depth-first order the tokenizer walks.
- *
- * Order is the whole contract. `tokenizeHtml` produces the token array that `custom_id`
- * hashes, so walking a second time in the same order and consuming translations
- * positionally keeps substitution aligned with identity by construction. Matching on text
- * VALUE instead would put the same word in two places out of step the moment one of them
- * is translated differently.
- */
-function substitute(nodes: Node[], next: () => string | undefined): void {
-    for (const node of nodes) {
-        if (isElement(node)) {
-            const tag = node.tagName.toLowerCase();
-            if ((SKIP_ELEMENTS as readonly string[]).includes(tag)) continue;
-        }
-
-        if (isText(node)) {
-            // A whitespace-only node produced no token, so it consumes none.
-            if (node.value.replace(/\s+/g, ' ').trim()) {
-                const replacement = next();
-                if (replacement !== undefined) {
-                    // Preserve the node's OWN leading and trailing whitespace and replace
-                    // only the part that became a token. The token is trimmed — that is
-                    // what identity hashes — but the node is not, and the space between
-                    // `Based on ` and `<strong>` is real rendered output. Replacing the
-                    // whole value collapses `Basato su <strong>5</strong>` into
-                    // `Basato su<strong>5</strong>`, which is invisible in a diff of the
-                    // tokens and obvious on the page.
-                    const [, lead = '', , trail = ''] = node.value.match(/^(\s*)([\s\S]*?)(\s*)$/) ?? [];
-                    node.value = lead + replacement + trail;
-                }
-            }
-            continue;
-        }
-
-        if (hasChildren(node)) substitute(node.childNodes, next);
-    }
-}
-
 /**
  * Resolve one `<Translate>` block against the current request's catalog.
  *
@@ -125,7 +78,9 @@ function substitute(nodes: Node[], next: () => string | undefined): void {
  */
 export function renderTranslateBlock(innerHtml: string, category = ''): RenderedBlock {
     const scope = getScope();
-    const tokens = tokenizeHtml(innerHtml);
+    // ONE parse and ONE walk, shared by registration and substitution — see `TokenSlot`.
+    const { fragment, slots } = collectSlots(innerHtml);
+    const tokens = slots.map((slot) => slot.token);
     const identity = deriveBlockIdentity(innerHtml, category);
     const missing: MissingPhrase[] = [];
 
@@ -165,21 +120,24 @@ export function renderTranslateBlock(innerHtml: string, category = ''): Rendered
         // WIRE-4 clause 2 applies here exactly as it does to `t()`: with no catalog a miss
         // is indistinguishable from a hit, and registering turns an outage into a storm.
         for (const token of tokens) queueMiss(scope, token, category);
-        missing.push(...tokens.map((phrase) => ({ phrase, category })));
+        // Deduplicated here, NOT in `tokens`. Arity is identity, so a repeated phrase stays in
+        // the token array four times; the returned record lists the phrases this block could
+        // not resolve, which is what registration sends and what a caller acts on.
+        missing.push(...[...new Set(tokens)].map((phrase) => ({ phrase, category })));
     }
 
     if (!block) return { html: innerHtml, customId: identity.primary.id, missing, known };
 
-    const fragment = parseFragment(innerHtml, { scriptingEnabled: true });
-    let i = 0;
-    substitute(fragment.childNodes, () => {
-        const source = tokens[i++];
-        if (source === undefined) return undefined;
-        const translated = block![source];
+    // Each slot writes back to exactly where its token came from. There is no index to
+    // fall out of step: a text node, an attribute, a button value each receive their own
+    // translation, and excluded, phrase-marked and code subtrees yield no slot at all, so
+    // they are left intact.
+    for (const slot of slots) {
+        const translated = block[slot.token];
         // CAT-2: the value decides display. `null` (registered, translation running) and
         // `''` both fall back to source text rather than blanking the copy.
-        return typeof translated === 'string' && translated.length > 0 ? translated : undefined;
-    });
+        if (typeof translated === 'string' && translated.length > 0) slot.apply(translated);
+    }
 
     return { html: serialize(fragment), customId: identity.primary.id, missing, known };
 }

@@ -321,3 +321,32 @@ describe('partial-coverage audit: content blocks', () => {
         expect(result.clean).toBe(true);
     });
 });
+
+describe('TOK-5 — `%name%` is accepted as the escape for `{name}`', () => {
+    // The interpolator is the core's, imported from /pure. This pins that both forms reach
+    // an author through THIS package's t(), which is where a framework forced the escape.
+    const server = () =>
+        createLangsysServer({
+            projectId: 'p',
+            apiKey: 'k',
+            baseLocale: 'en',
+            fetch: (async () =>
+                new Response(JSON.stringify({ status: true, data: { key_type: 'read' } }), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                })) as unknown as typeof globalThis.fetch,
+        });
+
+    it('resolves {name} and %name% to the same output', async () => {
+        const out = await server().run({ locale: 'en' }, () => [
+            t('Hello {name}', { name: 'Ada' }),
+            t('Hello %name%', { name: 'Ada' }),
+        ]);
+        expect(out.value).toEqual(['Hello Ada', 'Hello Ada']);
+    });
+
+    it('CONTROL: percent signs with no matching key are left alone', async () => {
+        const out = await server().run({ locale: 'en' }, () => t('Save 20%off% today', { name: 'Ada' }));
+        expect(out.value).toBe('Save 20%off% today');
+    });
+});

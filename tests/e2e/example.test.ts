@@ -218,6 +218,37 @@ describe.skipIf(!built)('SPEC §13.1 — the acceptance test', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe.skipIf(!built)('SRV-4 — the client is handed the catalog the server rendered with', () => {
+    /**
+     * The server half of SRV-4, asserted on the SERVED BYTES. The chain is
+     * `hooks.server.ts` (preloadCatalog into locals) -> `+layout.server.ts` (returns it) ->
+     * SvelteKit's inline hydration data. It has already broken silently once: locals were
+     * assigned AFTER `resolve()`, so the payload serialised `langsysCatalog: undefined`
+     * while every page still rendered Italian — the render had its own copy, and nothing
+     * asserted the hand-off. The synchronous client seed that consumes this is the browser
+     * core's half and the example does not call one yet, so this asserts only what this
+     * lane owes: the bytes a client hydrates from carry the catalog the server used.
+     */
+    const inlineScripts = (html: string): string =>
+        [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
+
+    it('serves the Italian catalog in the hydration payload for /it', async () => {
+        const data = inlineScripts(await (await fetch(`${APP}/it`)).text());
+        expect(data, 'no inline script carried the layout data at all').toContain('langsysCatalog');
+        // Body copy is excluded above, so this can only be matched by the handed-off catalog.
+        expect(data).toContain("L'idratazione inizia con un'acqua migliore.");
+        expect(data).toMatch(/"?langsysLocale"?:\s*"it"/);
+    });
+
+    it('NEGATIVE CONTROL: /de is handed its own catalog, not the Italian one', async () => {
+        const data = inlineScripts(await (await fetch(`${APP}/de`)).text());
+        expect(data).toContain('langsysCatalog');
+        expect(data).toMatch(/"?langsysLocale"?:\s*"de"/);
+        expect(data).not.toContain("L'idratazione");
+    });
+});
+
+// ---------------------------------------------------------------------------
 describe.skipIf(!built)('SPEC §13.2 — plurals with more than two forms', () => {
     it('renders the Russian FEW form, which a two-form language cannot express', async () => {
         const text = visibleBodyText(await (await fetch(`${APP}/ru`)).text());

@@ -122,27 +122,36 @@ export function isPhraseMarked(element: Element): boolean {
 }
 
 /**
- * Harvest translatable attribute values from one element.
+ * A token, together with the place in the tree it was read from.
  *
- * Order is identity. Two properties this must preserve, both verified in the base SDK
- * and both matching PHP:
+ * **This is what makes registration and substitution unable to drift.** They used to walk
+ * the tree separately: the tokenizer built the token array that identity hashes, and the
+ * `<Translate>` applier re-walked and consumed that array POSITIONALLY. The two walks
+ * disagreed. The tokenizer skips translation-excluded and phrase-marked subtrees and
+ * emits attribute and value tokens before an element's text; the applier mirrored only
+ * the code-element skip. So a block containing an image shifted every later text node
+ * onto the translation meant for the token before it, a phrase-marked span was
+ * overwritten, and attribute translations never rendered. Found by the TS lane's
+ * attribute probe, and silent in the way that matters: every output was plausible
+ * translated text in the wrong place.
  *
- *  1. It iterates the CONSTANT and pulls each value by name — it never enumerates the
- *     element's own attributes. So `<img title alt>` and `<img alt title>` produce
- *     identical tokens. An implementation that walks `element.attrs` would let an
- *     author re-key a block by reordering two attributes: the least suspicious edit
- *     that exists.
- *  2. `value` is emitted AFTER the whole constant loop — then `<button>`, then
- *     `<input type=submit|button>`.
+ * Now there is one walk. It yields each token with an `apply` bound to that token's exact
+ * location, so the applier never counts, and a translation cannot land anywhere but where
+ * its token came from — on every branch, including branches added later.
  */
+export interface TokenSlot {
+    readonly token: string;
+    /** Write a translation back to exactly where `token` was read from. */
+    apply(translated: string): void;
+}
+
 /**
  * An attribute value canonicalised the same way a text node is (TOK-4).
  *
  * `trim()` alone was the bug this replaces. A multiline `alt` produced a DIFFERENT id
  * from the identical sentence in a `<p>`, because text nodes collapsed their internal
  * runs and attributes did not — so the same words registered twice depending on where
- * the author happened to wrap the line. Invisible in rendered output, and invisible in
- * any fixture whose attribute values are single-line, which is all of the obvious ones.
+ * the author happened to wrap the line.
  *
  * `normalizeTokenText` comes from the core, so this cannot drift from the client SDK we
  * hydrate over: it is the same function, not the same intent.
@@ -152,9 +161,33 @@ function normalizedAttribute(element: Element, attr: string): string | undefined
     return raw === undefined || raw === null ? undefined : normalizeTokenText(raw);
 }
 
+function setAttribute(element: Element, name: string, value: string): void {
+    // Mirrors `getAttribute`: on a duplicate attribute parse5 keeps the FIRST, which is the
+    // one the token was read from, so it is the one the translation replaces.
+    const attr = element.attrs.find((a) => a.name === name);
+    if (attr) attr.value = value;
+}
+
+function attributeSlot(element: Element, name: string, value: string): TokenSlot {
+    return { token: normalizeMarkupPlaceholders(value), apply: (t) => setAttribute(element, name, t) };
+}
+
+/**
+ * Harvest translatable attribute values from one element, as slots.
+ *
+ * Order is identity. Two properties this must preserve, both verified in the base SDK
+ * and both matching PHP:
+ *
+ *  1. It iterates the CONSTANT and pulls each value by name — it never enumerates the
+ *     element's own attributes. So `<img title alt>` and `<img alt title>` produce
+ *     identical tokens. The slot still writes back to the attribute by NAME, so where a
+ *     translation lands is decided by location, not by the author's attribute order.
+ *  2. `value` is emitted AFTER the whole constant loop — then `<button>`, then
+ *     `<input type=submit|button>`.
+ */
 function tokenizeAttributes(
     element: Element,
-    tokens: string[],
+    slots: TokenSlot[],
     duplicateSelectOptions: boolean,
     translatableAttributes: readonly string[],
 ): void {
@@ -167,25 +200,29 @@ function tokenizeAttributes(
 
     for (const attr of translatableAttributes) {
         const value = normalizedAttribute(element, attr);
-        if (value) tokens.push(normalizeMarkupPlaceholders(value));
+        if (value) slots.push(attributeSlot(element, attr, value));
     }
 
     if ((VALUE_TRANSLATABLE_ELEMENTS as readonly string[]).includes(tagName)) {
         const value = normalizedAttribute(element, 'value');
-        if (value) tokens.push(normalizeMarkupPlaceholders(value));
+        if (value) slots.push(attributeSlot(element, 'value', value));
     }
 
     if (tagName === 'input') {
         const inputType = getAttribute(element, 'type')?.toLowerCase();
         if (inputType && (VALUE_TRANSLATABLE_INPUT_TYPES as readonly string[]).includes(inputType)) {
             const value = normalizedAttribute(element, 'value');
-            if (value) tokens.push(normalizeMarkupPlaceholders(value));
+            if (value) slots.push(attributeSlot(element, 'value', value));
         }
     }
 
     if (duplicateSelectOptions && tagName === 'select') {
         for (const optionText of collectOptionText(element)) {
-            tokens.push(normalizeMarkupPlaceholders(optionText));
+            // Reproduces pre-0.6.3 token ARITY for reading old ids, and nothing more. The
+            // apply is deliberately a no-op: each option's own text node yields its own
+            // slot during recursion and renders it there, so writing here as well would
+            // render the option twice.
+            slots.push({ token: normalizeMarkupPlaceholders(optionText), apply: () => {} });
         }
     }
 }
@@ -211,7 +248,7 @@ function textContentOf(node: Node): string {
 }
 
 /**
- * The walk. Mirrors `_walkForTokens` statement for statement.
+ * The walk. Mirrors `_walkForTokens` statement for statement, yielding slots.
  *
  * Order within the loop is load-bearing and is NOT rearranged:
  *   exclusion -> phrase marker -> attributes -> text -> recurse.
@@ -219,15 +256,15 @@ function textContentOf(node: Node): string {
  * Two consequences that are easy to get wrong and silent when wrong:
  *  - An excluded or phrase-marked element loses its ATTRIBUTES too. The check returns
  *    before `tokenizeAttributes`, so `translate="no"` on an `<img alt="...">` drops the
- *    `alt` as well as the subtree. Implementing this as "skip children" is wrong only
- *    on attribute-bearing nodes, which is exactly when nobody is looking.
+ *    `alt` as well as the subtree — and because the applier only ever writes through
+ *    slots, it leaves that `alt` untouched too.
  *  - Attributes precede children, depth-first in document order. A walker that emits
  *    attributes after text is conformant-looking and fragments every catalog
  *    containing an `alt` or a `placeholder`.
  */
-function walkForTokens(
+function walkSlots(
     nodes: readonly Node[],
-    tokens: string[],
+    slots: TokenSlot[],
     duplicateSelectOptions: boolean,
     skipCodeElements: boolean,
     translatableAttributes: readonly string[],
@@ -240,37 +277,64 @@ function walkForTokens(
             if (skipCodeElements && (SKIP_ELEMENTS as readonly string[]).includes(node.tagName.toLowerCase())) {
                 continue;
             }
-            tokenizeAttributes(node, tokens, duplicateSelectOptions, translatableAttributes);
+            tokenizeAttributes(node, slots, duplicateSelectOptions, translatableAttributes);
         }
 
         if (isTextNode(node)) {
-            // JS `\s` matches U+00A0, so `&nbsp;` collapses here — and as of
-            // `langsys-php` `e28972c`, PHP collapses it too. **This comment used to say
-            // the opposite**, describing PHP's `normalizeWhitespace()` as ASCII-only PCRE
-            // with a `trim()` charlist that excluded U+00A0, and concluding
-            // `<p>&nbsp;</p>` was one token there and zero here. That was true when it was
-            // written and is no longer.
-            //
-            // Re-measured by EXECUTING their parser rather than reading it
-            // (`extractPhrases` at `e28972c`, PHP 8.3.19): `<p>&nbsp;</p>` → `[]`,
-            // `<p>Buy\u00A0now</p>` → `["Buy now"]`, `<p>a\u2028b</p>` → `["a b"]`. All
-            // three agree with this package now.
-            //
-            // Kept as a correction rather than deleted, because the failure mode is the
-            // interesting part: a divergence note ages into a false claim the moment the
-            // other lane fixes something, and nothing here would have failed. The TS lane
-            // hit the same thing — their self-cleaning test checked that a divergence
-            // carried a NOTE, not that it was still TRUE.
+            // JS `\s` matches U+00A0, so `&nbsp;` collapses here — and as of `langsys-php`
+            // `e28972c`, PHP collapses it too. This comment used to say the opposite; it was
+            // re-measured by executing their parser (`extractPhrases`, PHP 8.3.19) and kept
+            // as a correction, because a divergence note ages into a false claim the moment
+            // the other lane fixes something, and nothing here would have failed.
             const contentToken = node.value.replace(/\s+/g, ' ').trim();
-            if (contentToken) tokens.push(normalizeMarkupPlaceholders(contentToken));
+            if (contentToken) {
+                const text = node;
+                slots.push({
+                    token: normalizeMarkupPlaceholders(contentToken),
+                    apply: (translated) => {
+                        // Preserve the node's OWN leading and trailing whitespace and replace
+                        // only the part that became a token. The token is trimmed — that is
+                        // what identity hashes — but the node is not, and the space between
+                        // `Based on ` and `<strong>` is real rendered output.
+                        const m = text.value.match(/^(\s*)([\s\S]*?)(\s*)$/);
+                        text.value = (m?.[1] ?? '') + translated + (m?.[3] ?? '');
+                    },
+                });
+            }
             continue;
         }
 
         // Comment nodes, doctypes and CDATA fall through to here and are dropped —
         // they are neither elements nor text, and have no child nodes.
         if (!hasChildNodes(node)) continue;
-        walkForTokens(node.childNodes, tokens, duplicateSelectOptions, skipCodeElements, translatableAttributes);
+        walkSlots(node.childNodes, slots, duplicateSelectOptions, skipCodeElements, translatableAttributes);
     }
+}
+
+/**
+ * Parse a block's inner HTML once and walk it once, returning the parsed fragment together
+ * with a slot for every token. The applier writes translations through the slots and then
+ * serialises THIS fragment, so registration and substitution are the same walk over the
+ * same tree.
+ */
+export function collectSlots(
+    innerHtml: string,
+    options: TokenizeOptions = {},
+): { fragment: DefaultTreeAdapterMap['documentFragment']; slots: TokenSlot[] } {
+    const {
+        duplicateSelectOptions = false,
+        skipCodeElements = true,
+        translatableAttributes = TRANSLATABLE_ATTRIBUTES,
+    } = options;
+
+    // `scriptingEnabled: true` is parse5's default, stated as a declaration of intent and
+    // NOT as a guard anything checks: with `<noscript>` excluded by TOK-1, both parse modes
+    // produce identical tokens and flipping this turns nothing red. It records which parser
+    // mode identity was established under; if it ever becomes observable, it needs a test.
+    const fragment = parseFragment(innerHtml, { scriptingEnabled: true });
+    const slots: TokenSlot[] = [];
+    walkSlots(fragment.childNodes, slots, duplicateSelectOptions, skipCodeElements, translatableAttributes);
+    return { fragment, slots };
 }
 
 /**
@@ -281,32 +345,9 @@ function walkForTokens(
  * hands inner HTML to `extractPhrases()`. **The root element's own attributes are not
  * harvested and its own markers are not honoured** — passing `outerHTML` here would
  * silently produce a different id.
+ *
+ * The tokens are exactly the slots' tokens, so identity and substitution cannot disagree.
  */
 export function tokenizeHtml(innerHtml: string, options: TokenizeOptions = {}): string[] {
-    const {
-        duplicateSelectOptions = false,
-        skipCodeElements = true,
-        translatableAttributes = TRANSLATABLE_ATTRIBUTES,
-    } = options;
-
-    // `scriptingEnabled: true` is parse5's default. Stated explicitly as a declaration of
-    // intent, NOT as a guard that anything currently checks.
-    //
-    // **It is unobservable on this tree, and saying so is the point.** While `<noscript>`
-    // was harvested the flag decided its id: scripting on yields one raw-text token
-    // (`<p>Enable JavaScript</p>`, measured in headless Chromium 153 and matched by
-    // parse5), scripting off yields parsed elements. TOK-1 now excludes `<noscript>`
-    // entirely, so both parse modes produce identical tokens and flipping this line turns
-    // NOTHING red — verified, 392 passed either way. There is no test here that can fail
-    // on it, and this comment previously claimed otherwise.
-    //
-    // Kept anyway, for one reason that is not a guard: it records which parser mode this
-    // package's identity was established under, so a future raw-text context (or a
-    // reversal of the noscript exclusion) starts from a stated position rather than from
-    // whatever parse5 defaults to that year. If it ever becomes observable again, it
-    // needs a test at that point — the explicit argument is not a substitute for one.
-    const fragment = parseFragment(innerHtml, { scriptingEnabled: true });
-    const tokens: string[] = [];
-    walkForTokens(fragment.childNodes, tokens, duplicateSelectOptions, skipCodeElements, translatableAttributes);
-    return tokens;
+    return collectSlots(innerHtml, options).slots.map((slot) => slot.token);
 }

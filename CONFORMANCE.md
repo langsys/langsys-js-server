@@ -3,234 +3,325 @@
 | | |
 |---|---|
 | **SDK** | `langsys-js-server` (server-side JS, the Node sibling to `langsys-php`) |
-| **Profiles** | `all`, `server` |
-| **specVersion** | 8 (published) |
-| **Spec revision read** | `docs/sdk-spec.mdx` blob **`8e2527b9f30e4e8a38121eeb7c401d4db60dfa6c`**, specVersion **8.0.1**. Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree origin/feature/838_write_key_gating docs/sdk-spec.mdx` at this write, not carried from the previous revision — six spec hashes have reached this lane and five are superseded |
+| **Profiles** | all, server |
+| **specVersion** | 8.0.1 (a correction to v8, not a new release; unpublished) |
+| **Spec revision read** | langsys2 5cff03a1…, docs/sdk-spec.mdx blob 5c5c0723f88fb8e6b13f58876c7adca8b6b35691 (specVersion 8.0.1). Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree 5cff03a1 docs/sdk-spec.mdx` at this write. The 79 rule ids are pinned to this blob in `_dev_/conformance-summary.mjs`, which exits 2 if this line cites a different one |
 | **SDK revision** | `feature/838_write_key_gating` at this commit, cut from `origin/main` `5f37284` |
-| **Core** | `langsys-js-typescript/pure` at **`5c5e7d3`** — the exact sibling commit the numbers below were measured against. Unpublished and resolved through a symlink, so this pin is load-bearing: an earlier revision of this file named `6596faf` while the symlink had already moved, which is the release precondition at the foot of this file happening to the file itself |
-| **Suite** | 416 passing, 1 skipped, 12 files. Plus 4 runtimes × 26 conformance checks, 15 e2e, 1 tarball acceptance |
-| **Reproducing the suite** | Two preconditions, neither obvious from `npm test`: run **`npm run build` first** (several tests are dist-gated and silently skip without it), and have **`../langsys-php-sdk` checked out** (`shared-fixtures.test.ts` hard-fails without it, by design — see CONF-2 on absence versus agreement). Without both, a clean archive reports 393 passing / 6 skipped / 1 failed |
+| **Core** | `langsys-js-typescript/pure` from the sibling checkout at **`a18e4a3`**, resolved through a `node_modules` symlink. Its `/pure` import graph (`identity`, `locale`, `interpolate`, `utils`) is unchanged since `4eac870`: the two commits between touch `src/translate.ts` only, and the uncommitted `src/translations.ts` in that tree is not reachable from `src/pure.ts`. Checked with `git diff --stat 4eac870..a18e4a3 -- src`, not assumed — an earlier revision of this file named a core commit the symlink had already left |
+| **Suite** | 508 passing, 1 skipped, 14 files (`npm test`, after `npm run build`). Plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, 17 e2e passing with 1 skipped by design, and tarball acceptance, whose digest `1f284758e5ac3f6dbbb31a642252ca8c` is unchanged by the shared walk — all from one `npm run test:all` on this tree |
+| **Reproducing the suite** | Two preconditions, neither obvious from `npm test`: run **`npm run build` first** (several tests are dist-gated and silently skip without it), and have **`../langsys-php-sdk` checked out** (`shared-fixtures.test.ts` hard-fails without it, by design — see CONF-2 on absence versus agreement) |
 
 <!-- SUMMARY:START -->
 ```
-79 rules across 16 families, in 59 table rows — each id exactly once
+79 rules across 16 families, one row each — each id exactly once
 53 bind all/server · 26 are another profile's
 
 By profile:
    47  all
    20  browser
-    6  server
     6  binding
+    6  server
 
 By status (binding rules only):
-   20  provisional
-   20  implemented
-    4  provisional (no test)
-    4  **gap**
-    2  **partial**
+   24  implemented
+   14  provisional
+    6  partial
+    4  delegated
+    3  not implemented
+    1  held (strip ruling)
     1  n/a (architecture: no report lane)
-    1  **partial — server half only**
-    1  **not met**
 
-By evidence grade, binding rules only (CONF-2):
-   21  mock
-   13  n/a (pure)
-    9  none
-    4  n/a
-    4  n/a (contract fixture)
-    1  n/a (measured)
-    1  n/a (structural)
+By tier, binding rules only (CONF-2):
+   30  n/a (pure)
+   16  mock
+    7  -
 ```
 <!-- SUMMARY:END -->
 
 Computed from the rows below by `node _dev_/conformance-summary.mjs`; `--check` fails if
-the two disagree. A summary typed from memory after editing fifty rows is the part of a
-file like this most likely to be wrong.
+the two disagree. The script also refuses the table outright — exit 2 — on a row naming
+more than one id, a duplicated id, an id missing from or foreign to the pinned spec, a
+status or tier outside the canonical vocabulary, or a header citing a different spec blob
+than the one its id list came from. Controls for each are recorded at the foot of this file.
 
 ---
 
 ## Read this before the table
 
-**Almost every row says `provisional`, and that is CONF-2 working, not this SDK failing.**
-CONF-2 grades evidence, and `mock` — asserting on outgoing payloads or a double that
-accepts everything — explicitly does not count. This package's transport tests inject a
-`fetch` stub. It *can* refuse — `registerFails` returns `status: false`, and the API suite
-drives 422s and 500s — but it is **not stateful**, which is CONF-2's actual bar: a second
-read cannot observe what a first write did or did not register. So the honest status is
-`provisional` even where the behaviour is implemented and mutation-tested.
-The shared contract fixture CONF-2 depends on does not exist yet; until it does,
-`provisional` is the ceiling for every transport-backed rule in all thirteen repos.
+**The Tier column records whether the property depends on what the API accepts, refuses or
+holds.** `n/a (pure)` means it does not — identity, tokenization, substitution, scheduling,
+cache keys — so the evidence is execution and the row can be `implemented`. `mock` means it
+does, and this suite's doubles cannot hold state across calls, so those rows are
+`provisional` however strong their tests are (CONF-2). `-` means no test points at the row.
+The previous revision graded by how a test was built rather than by what the property
+depends on, and rowed seven pure properties — GATE-4, REG-2, REG-3, REG-6, REG-7, CACHE-1,
+WIRE-5 — `provisional` because their tests happened to inject a `fetch` stub that never
+needed to say no.
 
-**Four evidence kinds may claim `implemented`, and they are not interchangeable.**
-`n/a (pure)` — identity, tokenization, interpolation: no transport exists to double, and
-the evidence is execution against a fixture authored in another lane. `n/a (contract
-fixture)` — the two cross-SDK fixtures, which are the strongest evidence in this file
-because neither was written here. `n/a (measured)` — HINT-2, where the claim is about the
-shipped bundle and is grepped from it with a positive control. `n/a (structural)` — a
-property the code shape makes unrepresentable rather than merely untriggered; **this is the
-weakest kind and an earlier revision over-used it**, rowing REG-6 `implemented` on
-structure alone with no test at all, which is a runtime rule graded above its evidence.
-Everything transport-backed is `mock`, and therefore `provisional`, whatever its tests
-look like.
+**What surfaced in this revision.** In descending order of cost:
 
-**WIRE-4 clause 2 was this file's top-ranked gap and is now closed** — it was fixed as item
-0 of 0.2.0 rather than left to rank. A failed catalog fetch used to queue every phrase on
-the page, so an API outage became a write storm against the same API. The row below carries
-the mutations.
+1. **`<Translate>` put translations in the wrong places, in pushed code, with every test
+   green.** The tokenizer and the applier walked the tree separately and disagreed. The
+   applier consumed translations by position and mirrored only the code-element skip; the
+   tokenizer also skips translation-excluded and phrase-marked subtrees, and takes attribute
+   and value tokens before an element's text. Measured on the old applier: an `<img alt>`
+   before some text moved every later text node onto the translation meant for the token
+   before it, a phrase-marked span and a `translate="no"` span were overwritten, and no
+   attribute translation ever rendered. No fixture carried an attribute or a marker. Fixed
+   with one walk that yields each token with a write-back bound to where it was read
+   (`collectSlots`), so registration and substitution cannot drift; identity is unchanged
+   (84 comparisons against the pre-fix tokenizer, 0 differ; four runtimes agree). Found by
+   the TypeScript lane's attribute probe, not by this lane — TOK-3 and SRV-1 were graded
+   above their evidence until then.
+2. **WIRE-2 was rowed on the wrong test, and the defect was live.** The row cited the
+   non-200 suite; WIRE-2 is about empty *success* responses. Executed: a `204` with no body
+   threw `SyntaxError: Unexpected end of JSON input` out of `send()`, so a registration the
+   server accepted was logged as failed — and, with REG-8's backoff now built, would have
+   opened a backoff window on a success. Fixed by branching on status before parsing.
+3. **CID-4 and ICU-1…5 were rowed on evidence that is not theirs.** CID-4 cited
+   derivation de-duplication; the rule is a content check before attaching to a legacy
+   match, and nothing performs one. ICU-1…3 and 5 cited tests in this repo that do not
+   exercise recovery; `interpolate` is the core's, and they are now rowed `delegated`.
+4. **A test that could not fail, found by mutation.** The option-duplicate pin compared the
+   shared walk's tokens with `tokenizeHtml` — which now reads its tokens off that same walk,
+   so dropping the duplicates moved both sides together and 0 went red. Re-pinned to a
+   literal measured by executing the pre-fix tokenizer.
+5. **Two reds that proved nothing.** The REG-8 in-flight test first failed on code with no
+   backoff at all, because it asserted 20ms into a 50ms send; and the WIRE-2 red-first run
+   selected no tests, because `zsh` does not word-split an unquoted variable, so vitest
+   received one filter matching no file. Both were caught before being counted, and both
+   reds were re-established: the in-flight test now goes red only under the mutation it
+   exists for (B4), and the WIRE-2 red was reconstructed by removing the fix.
 
-**What surfaced while writing this file.** Three things, in descending order of how much
-they cost:
+**REG-8's backoff is built; its retention half is held.** A failing endpoint now gets one
+probe per window per instance rather than a send per request. Keeping failed phrases queued
+needs a queue that outlives the request, which bends this package's one invariant, and is
+held for the operator's ruling together with GATE-2's hold-on-unknown.
 
-1. **MARK-1 is not implemented, and I would have rowed it green from memory.** The
-   constants exist (`PHRASE_MARKER_ATTRS_EMIT`, both spellings, exported), the audit path
-   reads markers, and the package talks about marker emission throughout — but nothing in
-   `src/` ever *writes* one. `grep` for the emit constant finds its definition and its
-   re-export and no call site. A rendered host carries no id today. That is 0.2.0 work and
-   it is now a gap rather than a row.
-2. **REG-11 has no implementation at all.** No ellipsis warning exists. It is a `all`-profile
-   rule and this package silently had nothing behind it.
-3. **GATE-6 and GATE-7 both govern the register lane's relationship to the report lane,
-   and HINT-2 means this SDK has only one of those lanes.** The first draft of this file
-   rowed both `n/a (vacuous)` on that basis. That was wrong twice, and the corrections are
-   in their rows: GATE-6 has a half that genuinely binds and is tested — a non-write-enabled
-   session must not ATTEMPT to register — which a whole-rule `n/a` hid behind the
-   untestable half; and GATE-7's stated reason was false, because for a read-only session
-   no path feeds *either* lane, which is the rule's invisible-path case rather than a
-   satisfied one. `n/a (vacuous)` is retired as a status: it was neither of the two kinds
-   the spec recognises (profile, or architecture), and it let a binding rule read as
-   excluded.
+**Instance state, declared.** The invariant is that nothing request-varying lives outside
+the request scope. Four facts live on the `LangsysServer` instance and are identical for
+every request to it: `keyType`, `writeEnabled`, `batchLimit`, and — new in this revision —
+the REG-8 failure clock. The first three are copied into each request's scope at `run()`.
+The clock is read at drain time instead, deliberately: it exists to react to a failure that
+landed after the request started rendering. It is per instance, never per module — a
+module-level clock lets one project's failing key silence every other project in the
+process, and the mutation that makes it process-global (B9) turns 17 tests red.
 
 **GATE-3 carve-out, declared here because GATE-3 requires it to be declared.** This SDK
-holds `write_enabled` on the server instance across requests, and copies it into each
-request's `AsyncLocalStorage` scope. GATE-3's narrow carve-out permits a process-level
-value only where capability provably does not vary per session — and it voids the moment a
-write grant is configured, because a grant makes capability per-user. **This package
-exposes no grant surface**: there is no `writeGrant` or `strategy` option in
-`LangsysServerConfig`, no grant is ever sent, and GRANT-1…4 are `browser`-profiled. (A
-grep for those words is not zero — `src/index.ts` carries the word in a comment — so the
-claim is about the config type and the wire, not about a text search.) Capability here depends solely on
-this server's own outbound address, which is constant for the process. If a grant surface
-is ever added, this carve-out is void and the decision must move fully per-request.
+holds `write_enabled` on the server instance across requests and copies it into each
+request's `AsyncLocalStorage` scope. GATE-3's narrow carve-out permits a process-level value
+only where capability provably does not vary per session, and it voids the moment a write
+grant is configured, because a grant makes capability per-user. **This package exposes no
+grant surface**: there is no `writeGrant` or `strategy` option in `LangsysServerConfig`, no
+grant is ever sent — `build-output` asserts the shipped bundle carries no `X-Write-Grant` —
+and GRANT-1…4 are `browser`-profiled. Capability here depends solely on this server's own
+outbound address, which is constant for the process. If a grant surface is ever added, this
+carve-out is void and the decision must move fully per-request.
 
 ---
 
 ## Status
 
-| Rule | Profile | Status | Evidence | Test / reason |
+| Rule | Status | Tier | Evidence | Profile |
 |---|---|---|---|---|
-| GATE-1 | all | provisional | mock | `harvest` "GATE-1 — the decision is the server's write_enabled" — 5 cases covering both failure directions, incl. `ip_write` + `write_enabled: true` registering (the discovery-renderer case) and the flag read off the `/translations` **envelope**. Mutations: ignore-positive → 4 red, ignore-negative → 2 red |
-| GATE-2 | all | **partial** | none | Collection is unconditional in `t()` and the lane is chosen at the send site, which is the rule's first half. **The second half is not met and the row must say so:** the send site COLLAPSES unknown into refused-and-consumed rather than holding. With authorize failing and no envelope flag, two queued phrases produce 0 POSTs and a "could not be determined" refusal, and the batch is marked consumed. The rule's text is *hold* on unknown. Low cost — the scope dies with the request either way — but it is a divergence, not a gap in testing |
-| GATE-3 | all | provisional (no test) | none | **Carve-out taken and declared above.** `write_enabled` is never written to any cache; the instance copy is snapshotted into the request scope and never read at drain time. No test asserts the decision cannot outlive a request |
-| GATE-4 | all | provisional | mock | `authorize()` projects the payload to three fields and drops the body, so no artifact can carry the flag; `/translations` is read off the envelope **before** `normalizeCatalog`, and only the body is cached. Proven negatively by the GATE-8 c5 test below |
-| GATE-5 | all | provisional | mock | Bookkeeping (`missSeen`, `posted`) is request-scoped and dies with the request, so no cross-request false marker is representable. **But `posted` advances before the await**, so within one request a failed send is marked consumed — see REG-8 |
-| GATE-6 | all | provisional | mock | **Half of this rule binds and is tested.** Sentence 2 — a non-write-enabled session must not ATTEMPT to register — is exercised by `harvest` "write-key gating" and the GATE-1 block (`write_enabled: false` → 0 POSTs; `true` → 1). The mutual-exclusion half is architecturally unreachable here: there is no report lane to be exclusive with (HINT-2). Rowed on the half that can fail, with the other half named — an earlier revision rowed the whole rule `n/a (vacuous)`, which hid a tested obligation behind an untestable one |
-| GATE-7 | all | n/a (architecture: no report lane) | n/a | **The earlier reason here was false.** It said every detection path feeds the register lane; for a READ-ONLY session no path feeds either lane — registration is refused and reporting does not exist by HINT-2 design. That is precisely the rule's "invisible path" case, and this SDK has it structurally: a read-only server render discovers content and does nothing with it. Not a defect to fix locally (HINT-2 forbids the other lane) but it must be stated, not rowed green |
-| GATE-8 | all | provisional | mock | `harvest` "GATE-8 — a missing write_enabled is a version signal" — plain-`write` fallback, `ip_write` refused **with its message asserted**, non-boolean treated as absent (vectors: truthy `"false"` on a read key, `0` on a write key), re-evaluated per response, and **constraint 5** (two instances over one shared cache; a cached payload must not trigger the fallback). Mutations: delete the `ip_write` branch → 1 red; `Boolean()` coercion → 2 red; cache-hit fires the capability callback → `expected 1 to be +0` |
-| CAT-1 | all | implemented | n/a (pure) | `translator` "CAT-1/CAT-2/CAT-3" — present-with-null and present-with-`''` are not re-registered; inherited `Object.prototype` names still ARE. Mutation: `hasOwnProperty` → `in` → 1 red |
-| CAT-2 | all | implemented | n/a (pure) | Same block — `null`, `''` and an object all display source text while no longer registering |
-| CAT-3 | all | implemented | n/a (pure) | Same block — a content block present as an object is not re-POSTed under its raw custom id |
-| REG-1 | all | provisional | mock | `harvest` "write-key gating" + the GATE-1 block; a refused session makes no call at all |
-| REG-2 | all | provisional | mock | Server analogue of debounce: the drain is scheduled on `setImmediate` after the response flush, never on a fixed interval. `harvest` "never in the TTFB path" |
-| REG-3 | all | provisional | mock | `harvest` "flush() for edge runtimes" — `flush(result)` drains the scope that rendered, for `waitUntil` |
-| REG-4 | browser | n/a | n/a | Profile `browser`. No teardown event exists on this profile |
-| REG-5 | browser | n/a | n/a | Profile `browser` |
-| REG-6 | all | provisional | mock | `harvest` "REG-6 — the batch that was SENT is what gets marked" — one scope, a late miss arriving via ALS propagation while that scope's own POST is in flight, plus a control that a phrase is not duplicated. **The first version of this test was worthless**: it called `run()` twice, which is two scopes with two queues, so nothing could be lost between them — the mutation turned it 0 red. Rewritten. Mutation now: mark the LIVE queue post-await instead of the snapshot → 1 red |
-| REG-7 | all | provisional | mock | Chunks are sent in a sequential `await` loop, with `scope.draining` guarding concurrent drains |
-| REG-8 | all | **gap** | none | **Not implemented.** No retry and no backoff. Because `posted` advances pre-await, a failed batch is already consumed and is dropped rather than re-queued. Failure is logged, never retried |
-| REG-9 | all | provisional | mock | `harvest` "REG-9 — batch to the server-provided limit" — chunks to `langsys_settings.translatable_items.batch_limit` on **both** drain paths, defaults to 200, guards `0`/negative/non-numeric. Mutations: no chunking → 9 red; hardcode 200 → 3 red; read one level short → 2 red; drop the `>=1` guard → 3 red; ignore the advertised limit → 2 red |
-| REG-10 | all | provisional | mock | `harvest` "fire-and-forget, but not silent" — never throws into the render path, always logs, returns `Promise<void>` so there is no success-shaped value to be wrong about |
-| REG-11 | all | **gap** | none | **Not implemented.** No ellipsis warning exists anywhere in `src/` |
-| REG-12 | all | provisional (no test) | none | Code: content blocks are distinguished structurally (`t()` treats a non-string value as known), not by string shape. No test asserts the structural path specifically |
-| HINT-2 | server | implemented | n/a (measured) | **Falsifiably met.** Positive control first: `LangsysAppAPI.postDiscoveryHint` is a live function on the core, so the rule is violable in this family. The shipped bundle contains **0** occurrences of `postDiscoveryHint` or `discovery/hint`; its only endpoints are `authorize-project`, `translatable-items`, `translations` |
-| HINT-1, 3–12 | browser | n/a | n/a | Profile `browser` |
-| ICU-1 | all | implemented | n/a (pure) | `translator` "interpolation" — a missing argument selects the `other` branch |
-| ICU-2 | all | implemented | n/a (pure) | Same block — `null` counts as missing |
-| ICU-3 | all | implemented | n/a (pure) | Same block — recovery is recursive and `#` becomes the visible argument name |
-| ICU-4 | all | provisional (no test) | none | Recovery is observable in the return value, but nothing asserts it is *reported*. `findUnusedParamKeys` warns on a different condition |
-| ICU-5 | all | implemented | n/a (pure) | Supplied arguments keep CLDR selection; verified through the core's `interpolate` against the same vectors both SDKs run |
-| CID-1 | all | implemented | n/a (contract fixture) | `shared-fixtures` — `langsys-php-sdk`'s `custom-id-reference.json`, blob **`60dc9b33`**, 13 rows, asserting `canonical_json`, `serialized_hex` **and** `custom_id` separately. Covers U+2028/U+2029, non-BMP U+1F600, Cyrillic and slash-bearing categories. The blob hash itself is recomputed and pinned |
-| CID-2 | all | implemented | n/a (pure) | `cid-2` — the `'__uncategorized__'` sentinel is coalesced **at the boundary** in `deriveBlockIdentity`, asserted on the whole derivation set rather than the primary id. `generateLegacyCustomId` deliberately does not coalesce, so the sentinel previously emitted a fallback an empty category never did: equal primaries, unequal fallback sets |
-| CID-3 | all | implemented | n/a (pure) | `derivations` "the two historical LEGACY-token shapes" — pinned to `HISTORICAL_TRANSLATABLE_ATTRIBUTES_15` so they reproduce what was actually stored. Registration always uses the corrected derivation; the legacy ids are read-only |
-| CID-4 | all | provisional (no test) | none | Code: `derivations.ts` dedups by id so a collapsed derivation is not counted twice. No test verifies content before attaching to a legacy match |
-| TOK-1 | all | **partial** | n/a (contract fixture) | Met for `script`/`style`/`template`/`noscript`, with the ordinary-markup control the rule names. **`<math>` is NOT excluded and 8.0.1 requires it.** Measured: this package gives `['Area','x','+','2','units']` where the rule and `langsys-php` (already conformant at `e28972c`, verified by executing `extractPhrases`) give `['Area','units']`. Not fixed unilaterally — `SKIP_ELEMENTS` re-exports the core's list, and overriding it would split ids with our own hydration partner on every block containing a `<math>`. Core first, then here, exactly as noscript went. A test flips red when the core ships it |
-| TOK-2 | all | implemented | n/a (pure) | Met for free and deliberately not over-implemented: `tokenizer.ts` uses a plain `/\s+/g`, and JS `\s` already matches U+00A0. The rule forbids adding a redundant character class |
-| TOK-3 | all | implemented | n/a (contract fixture) | `attribute-list-pin` — the 27, **in order**, pinned against a literal transcribed by hand from `langsys-php`'s `HtmlParser.php` rather than sliced from the constant, which since convergence *is* the core's array |
-| TOK-4 | all | implemented | n/a (contract fixture) | Attribute values **and `<option>` text** go through the core's `normalizeTokenText`. Covered by the core's `canonicalization-reference.json`, blob **`e4c1f185`**, 19 rows, 19 pass |
-| TOK-5 | all | implemented | n/a (pure) | `%name%` is accepted as the escape for `{name}`; `normalizeMarkupPlaceholders` comes from the core |
-| MARK-1 | all | **gap** | none | **Not implemented.** Nothing in `src/` emits a marker. `PHRASE_MARKER_ATTRS_EMIT` is defined and re-exported with no call site. 0.2.0 work |
-| MARK-2 | all | implemented | n/a (pure) | `PHRASE_MARKER_ATTRS` carries both `data-ls-*` and `data-langsys-*` on the READ path; `auditRenderedHtml` accepts either |
-| SRV-1 | server | provisional | mock | `e2e/example` — a real SvelteKit build, asserting on the **served bytes** rather than a hydrated DOM, with a control phrase absent from the catalog so "translated" is distinguished from "the catalog happened to be complete" |
-| SRV-2 | server | implemented | n/a (structural) | `isolation` "concurrent requests for different locales" — the catalog lives in the `AsyncLocalStorage` scope. Mutation on record: swapping ALS for a module global turns 4 isolation tests red |
-| SRV-3 | server | provisional | mock | `harvest` "never in the TTFB path" asserts the **order of events**, not the outcome: registration count is `0` immediately after `run()` resolves and `1` only after the drain settles, with a 50 ms artificial delay proving the render did not wait. Read-only half has a write-key positive control on the same render shape |
-| SRV-4 | server | **partial — server half only** | mock | This lane holds the SERVER half: `run()` returns `result.catalog` through `normalizeCatalog`, which is the shape the client seed consumes. **The other two halves are not ours and are named rather than claimed**: exposing a synchronous seed is the browser core's, and calling it before hydration is a binding's. The round-trip test (our output → core seed → `t()` returns the same string) is a gap, blocked on the core's seed landing |
-| SRV-5 | server | **gap** | none | **Not implemented.** Component child capture is 0.2.0. The once-per-subtree half will be measurable here; the fail-loud-on-an-uncapturable-child half belongs to the adapters |
-| SSR-1..3 | browser | n/a | n/a | Profile `browser`. These govern what the **browser** SDK does when it happens to run under server rendering; the module instance making those decisions is the browser's. (The families table said `server (JS)` until v8 — corrected after this lane read the row against its own code) |
-| BIND-1..6 | binding | n/a | n/a | Profile `binding`. This is a core, not a binding |
-| GRANT-1..4 | browser | n/a | n/a | Profile `browser`. A server SDK holds a write key already. **The server posture is testable rather than absent**: this package never sends `X-Write-Grant`, and exposes no grant surface — which is also what makes the GATE-3 carve-out valid |
-| CACHE-1 | all | provisional | mock | `catalog` "CACHE-1 — keys are namespaced by project" — reproduced the defect before fixing (project B served project A's catalog through a shared adapter), with a positive control that one project still reads its own cached copy. Mutations: drop the project id → 4 red; substitute a constant segment → 4 red |
-| OBS-1 | all | provisional | mock | `harvest` "write-key gating" — a capability refusal on a key expected to write warns once per process, unconditionally. The base SDK's `if (debug)` gate is deliberately not copied |
-| WIRE-1 | all | provisional | mock | `api` "request headers" — `x-Authorization` asserted on every request, plus `X-Langsys-Capabilities: icu` (whose absence silently downgrades every plural) |
-| WIRE-2 | all | provisional | mock | `api` "non-200 responses" — a 422 carrying valid JSON is separated from a 500 with a non-JSON body, so the `ok` check cannot pass for the wrong reason |
-| WIRE-3 | all | implemented | n/a (pure) | `api` "WIRE-3: sends lowercase xx-yy on the wire" plus a second assertion that four spellings of one locale collapse to one wire form. Resolved by construction on the `/pure` re-parent; `0.1.0` shipped the cased form |
-| WIRE-4 | all | provisional | mock | **Clause 1** — `harvest` "WIRE-4 clause 1", checked in rather than cited from a scratch run: a real connection refusal at `127.0.0.1:1`, with `run()`+`t()` and `preloadCatalog()` both degrading, and a reachable-stub control. The row previously cited a measurement that existed only in a transcript, which CONF-2 grades as a memory. **Clause 2** — met on BOTH paths. The inline fetch was fixed first and the row claimed the clause outright while `preloadCatalog()` → `run({ catalog })` — the shape `example/src/hooks.server.ts` actually uses — still produced the identical pre-fix numbers, 40 queued and one POST of 40. `preloadCatalog` now marks a failed result with a non-enumerable Symbol and `run()` honours it; `catalogAvailable` is also accepted explicitly. Mutations below |
-| WIRE-5 | all | provisional | mock | `api` "URL construction" — `apiUrl` is constructor-injected and redirectable to a double; trailing slashes stripped; the default host asserted |
-| CONF-1 | all | **not met** | n/a | Transport assertions here inspect a `fetch` stub, which is what CONF-1 forbids as sole evidence. Honest status pending the shared contract fixture |
-| CONF-2 | all | implemented | n/a | Every row above carries a grade, and `mock` rows record `provisional` rather than `implemented` |
-| CONF-3 | all | implemented | n/a | Mutations are recorded per rule with their red counts, measured full-suite on this tree. **`scriptingEnabled: false` is recorded as an EQUIVALENT MUTANT — 0 red** — rather than claimed as a kill |
+| GATE-1 | provisional | mock | `harvest` "GATE-1 — the decision is the server's write_enabled, never the key type": both failure directions, `ip_write` + `write_enabled: true` registering (the discovery renderer), and the flag read off the `/translations` envelope. Mutations: ignore the positive answer → 4 red; ignore the negative → 2 red. The property is the server's answer, and these doubles hold no state. Waits on: CONF-2 shared contract fixture. | all |
+| GATE-2 | partial | mock | Collection is unconditional in `t()` and the lane is chosen at the send site, which is the rule's first half. **Not met: unknown is collapsed into refused-and-consumed rather than held.** Measured, not checked in: authorize HTTP 500 → 1 queued, 0 POSTs, a "could not be determined" refusal, the batch consumed, and no re-authorize inside `AUTHORIZE_RETRY_MS`. Holding needs the queue to outlive the request; held for the operator's ruling with REG-8 retention. | all |
+| GATE-3 | partial | - | Carve-out taken and declared above. `write_enabled` is never written to any cache and is snapshotted into each request scope at `run()`; the drain reads the scope, never the instance. Missing: a test that the decision cannot outlive a request. | all |
+| GATE-4 | implemented | n/a (pure) | `authorize()` projects its payload to the key type, the capability and the batch limit, and drops the body; `/translations` is read off the envelope before `normalizeCatalog`, and only the body is cached. `harvest` "constraint 5 — never applies the fallback from a CACHED payload" runs two instances over one shared cache with the server saying `write_enabled: false`, and the cache-served instance still refuses. Mutation: the cache-hit path fires the capability callback → `expected 1 to be +0`. What the cache holds does not depend on what the API accepts. | all |
+| GATE-5 | provisional | mock | Bookkeeping (`missSeen`, `posted`) is request-scoped and dies with the request, so no cross-request false marker is representable. `posted` advances before the await, so a failed send within one request is consumed rather than marked registered; REG-8 now backs off after it, and keeping it queued is held. Acceptance is the property, and proving it needs a double that refuses and a second read. Waits on: CONF-2 shared contract fixture. | all |
+| GATE-6 | provisional | mock | Split row. Sentence 2 binds and is tested: a non-write-enabled session never attempts to register (`harvest` "write-key gating" and the GATE-1 block: `write_enabled: false` → 0 POSTs, `true` → 1). Sentence 1 is unreachable here: there is no report lane to be exclusive with (HINT-2). Waits on: CONF-2 shared contract fixture. | all |
+| GATE-7 | n/a (architecture: no report lane) | - | For a read-only session no path feeds either lane: registration is refused, and reporting does not exist by HINT-2's design. That is the rule's invisible-path case, present structurally, and stated rather than rowed green; the lane that would close it is the one HINT-2 forbids. | all |
+| GATE-8 | provisional | mock | `harvest` "GATE-8 — a missing write_enabled is a version signal, never permission": plain-`write` fallback; `ip_write` refused with its message asserted; non-boolean treated as absent (a truthy `"false"` on a read key, `0` on a write key); re-evaluated per response; and constraint 5 over a shared cache. Mutations: delete the `ip_write` branch → 1 red; `Boolean()` coercion → 2 red; the cache-hit capability callback → `expected 1 to be +0`. Waits on: CONF-2 shared contract fixture. | all |
+| CAT-1 | implemented | n/a (pure) | `translator` "CAT-1/CAT-2/CAT-3 — presence decides registration, the value decides display": present-with-null and present-with-`''` are not re-registered; inherited `Object.prototype` names still are. Mutation: `hasOwnProperty` → `in` → 1 red. `renderTranslateBlock` applies the same own-property presence test. | all |
+| CAT-2 | implemented | n/a (pure) | Same block: `null`, `''` and an object all display source text. On the block path, `blocks` "CAT-2: a null translation renders SOURCE text, not blank" and "CAT-2: an empty-string translation renders source text too"; loosening the guard to any non-undefined value → 2 red (M11). | all |
+| CAT-3 | implemented | n/a (pure) | Same block: a content block present as an object is not re-POSTed under its raw custom id. | all |
+| REG-1 | provisional | mock | `harvest` "write-key gating" and the GATE-1 block: a refused session makes no call at all, asserted as a stub that saw none (see CONF-1). Waits on: CONF-2 shared contract fixture. | all |
+| REG-2 | implemented | n/a (pure) | No interval exists to be the only path: misses drain on `setImmediate` after the response flushes, so one render's burst is one send per batch-limit chunk. `harvest` "never in the TTFB path" asserts the order of events: 0 registrations when `run()` resolves, 1 after the drain settles. When a send goes out does not depend on what the API answers. | all |
+| REG-3 | implemented | n/a (pure) | A public manual flush exists and drains the scope that rendered: `harvest` "flush() for edge runtimes" — drains when awaited, for `waitUntil`; no double-post in either order with the scheduled drain; loud when handed a value `run()` did not produce. The automatic path is not treated as reliable. On the REG-3/REG-8 shutdown conflict the spec leaves open, a failed flush is logged with what was not registered, never silent. | all |
+| REG-4 | n/a (profile: browser) | - | Profile `browser`. No teardown event exists on this profile. | browser |
+| REG-5 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| REG-6 | implemented | n/a (pure) | `harvest` "REG-6 — the batch that was SENT is what gets marked, not the queue as it stands": one scope, a late miss arriving through ALS while that scope's own POST is in flight, plus a control that a phrase is sent once. The first version called `run()` twice — two scopes, two queues — and went 0 red under its own mutation; rewritten. Mutation: mark the live queue after the await → 1 red. | all |
+| REG-7 | implemented | n/a (pure) | The rule is a title with no body at this revision, so the server reading is stated in the test: one QUEUE never has two sends in flight. Queues are per request, so two concurrent requests to an instance can each have one — the REG-8 in-flight test depends on that. `harvest` "REG-7 — one send in flight at a time, per queue": a chunked queue never overlaps (three chunks, at most one in flight), and a `flush()` while the queue is still sending waits rather than overlapping. Mutations: remove the per-queue draining guard → 1 red (R1); fire chunks without awaiting → 1 red (R2). | all |
+| REG-8 | partial | mock | **Backoff: built.** One failure clock per `LangsysServer`; 3s doubling to a 300s ceiling, reset on the first success; a drain inside the window sends nothing and warns once per window with what it dropped; a send already in flight when an earlier failure opened the window does not escalate it; a thrown send counts; the `flush()` path obeys it. `harvest` "REG-8 — a failed send backs off, per instance", 10 tests; mutations B1–B11 below, every one red. **Retention: not built, held** for the operator's ruling — a failed or skipped phrase is not re-queued, and registers the next time it renders after the window. Depends on the server refusing. Waits on: the retention ruling, and CONF-2 shared contract fixture. | all |
+| REG-9 | provisional | mock | `harvest` "REG-9 — batch to the server-provided limit, on every path": chunks to `langsys_settings.translatable_items.batch_limit` on both drain paths, defaults to 200, guards `0`, negative and non-numeric. Mutations: no chunking → 9 red; hardcode 200 → 3 red; read one level short → 2 red; drop the `>=1` guard → 3 red; ignore the advertised limit → 2 red. Depends on the limit the server advertises and enforces. Waits on: CONF-2 shared contract fixture. | all |
+| REG-10 | provisional | mock | `harvest` "fire-and-forget, but not silent": a failed and a throwing registration both log without failing the render. Drains return `Promise<void>`, so no success-shaped value exists to be wrong about, and a refused session consumes its batch without reporting success. Waits on: CONF-2 shared contract fixture. | all |
+| REG-11 | not implemented | - | No ellipsis warning exists in `src/`. Held by the operator with this round's other behaviour changes. | all |
+| REG-12 | partial | - | No test. In code, `t()` branches on structure: a non-string catalog value is known and never queued. Missing: a test that text colliding with a block id is not re-registered, on both `t()` and the block path. | all |
+| HINT-1 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-2 | implemented | n/a (pure) | `build-output` asserts the shipped bundle carries none of the core graph's string markers, `discovery/hint` among them, and `_dev_/singleton-guard.sh` proves that guard can fail: the same build with the core graph imported carries every marker. The bundle's only endpoints are `authorize-project`, `translatable-items` and `translations`. | server |
+| HINT-3 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-4 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-5 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-6 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-7 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-8 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-9 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-10 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-11 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| HINT-12 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| ICU-1 | delegated | n/a (pure) | `interpolate` is the core's, imported from `/pure` and not reimplemented; the evidence is rowed in the core's conformance record, `interpolation-cross-impl` against all 19 rows of `langsys-php`'s `interpolation-reference.json`. No test in this repo exercises recovery — the previous revision cited one that does not. | all |
+| ICU-2 | delegated | n/a (pure) | As ICU-1: the core's `interpolate`, with null-as-absent asserted in the core's suite. No test here. | all |
+| ICU-3 | delegated | n/a (pure) | As ICU-1: recursive recovery and `#` rendering the argument name are asserted in the core's suite. No test here. | all |
+| ICU-4 | partial | - | No test. `interpolate` is the core's, whose defaulted-argument notice is asserted in the core's suite behind the core's own logger. Missing: evidence that the notice fires, and names the argument, under this package's `debug` option. | all |
+| ICU-5 | delegated | n/a (pure) | As ICU-1: supplied arguments keep CLDR selection and the recovered literal survives formatting, asserted in the core's suite. `translator` "renders ICU plurals for a language with more than two forms" covers selection with every argument supplied, not recovery. | all |
+| CID-1 | implemented | n/a (pure) | `shared-fixtures` against `langsys-php-sdk`'s `custom-id-reference.json`, blob **`633a09d9`** (was `60dc9b33`), 13 rows, each asserting `canonical_json`, `serialized_hex` and `custom_id` separately; the blob hash is recomputed and pinned. Covers U+2028/U+2029, non-BMP U+1F600, Cyrillic and slash-bearing categories. Authored in another lane. | all |
+| CID-2 | implemented | n/a (pure) | `conformance/cid-2`: the `'__uncategorized__'` sentinel is coalesced at the boundary in `deriveBlockIdentity`, asserted on the whole derivation set rather than the primary id — `generateLegacyCustomId` deliberately does not coalesce, so the sentinel once emitted a fallback an empty category never did. | all |
+| CID-3 | implemented | n/a (pure) | `derivations` "the two historical LEGACY-token shapes", pinned to `HISTORICAL_TRANSLATABLE_ATTRIBUTES_15` so they reproduce what was actually stored. Registration always uses the primary derivation; the legacy ids are read-only, and `renderTranslateBlock` reads under them. | all |
+| CID-4 | not implemented | - | After a historical-id lookup resolves, `renderTranslateBlock` attaches on id presence alone and does not compare the found block's `(category, phrases)` with the current block's, so a collision would attach the wrong text. The previous revision rowed this on derivation de-duplication, which is a different property. A behaviour change, so not built under this round's cheap-fix ruling. | all |
+| TOK-1 | implemented | n/a (pure) | `script`, `style`, `template`, `noscript` and `math` are excluded through `SKIP_ELEMENTS`, a re-export of the core's `NON_TRANSLATABLE_ELEMENTS`. Proven per path (CONF-1). Tokenize: `walker-parity` "excludes math content — the spec vector, arriving through the re-export" (`['Area','units']`, the vector `langsys-php` produced by executing `extractPhrases`) and the `<noscript>` cases, with the ordinary-markup control. Render: `blocks` "math content is not translated, and the text around it is", and "inline svg keeps the parent text, translates svg <text> in place, and leaves <path> intact"; tokenize and render share one walk. `<Phrase>`: `phrase` "script and style bodies contribute nothing", and asserted for `math` by the same constant. Core fixture: 26 rows against this blob. The math gap closed when the core shipped it (`105943f`), and the test recording the gap went red as designed. | all |
+| TOK-2 | held (strip ruling) | n/a (pure) | Held: the C0 control-character clause (U+0001–U+0008, U+000B, U+000C, U+000E–U+001F), pending the operator's strip ruling; nothing built. The rest is met through the core's `normalizeTokenText` on attributes and `/\s+/g` on text nodes: the core fixture's collapse-set rows (26 rows, this blob, including `feff-in-text`, `nel-in-text` and `mvs-in-text`), and on the render path `blocks` "a placeholder with an NBSP registers and LOOKS UP under the same key", with the line-break and doubled-space vectors. | all |
+| TOK-3 | implemented | n/a (pure) | `attribute-list-pin` "is array-identical to PHP's list, INCLUDING order": the 27 against a literal transcribed by hand from `langsys-php`'s `HtmlParser.php`, since the constant now is the core's array. The spec's own vector, proven on both paths (CONF-1): `blocks` "TOK-3 — the spec vector, proven on both paths" — three listed and two unlisted attributes, authored out of list order, give three phrases in list order and render each in place with the unlisted two untouched; plus "TOK-3 order decides the token sequence, but location decides where each lands". Mutations: walk the element's own attributes instead of the constant → 1 red (T1); attribute write ignores the name → 3 red (M3); attribute write a no-op → 9 red (M2). Attribute translations never rendered before this revision — see "What surfaced", item 1. | all |
+| TOK-4 | implemented | n/a (pure) | Attribute values and `<option>` text go through the core's `normalizeTokenText`: the core's `canonicalization-reference.json`, 26 rows against spec blob `5c5c0723`, every row asserting tokens and id. On the render path, the line-break, doubled-space and NBSP placeholder tests assert the key registers and looks up the same. | all |
+| TOK-5 | implemented | n/a (pure) | Capture: the core fixture rows `percent-name-in-markup` and `brace-name-in-markup` reach one id. Interpolation, through this package's `t()`: `translator` "TOK-5 — `%name%` is accepted as the escape for `{name}`" — both forms give the same output, and a control that percent prose with no matching key is left alone. `interpolate` itself is the core's. | all |
+| MARK-1 | not implemented | - | Held by the operator. `stampContentBlock()` returns the attribute pair and no render path writes it onto a host, so a rendered `<Translate>` host carries no id. | all |
+| MARK-2 | implemented | n/a (pure) | Both spellings accepted on read: `translator` "recognises the PHP marker spelling too" on the audit path (`data-langsys-phrase`), and `CONTENT_BLOCK_MARKER_ATTRS` carries `data-langsys-contentblock` beside `data-ls-contentblock`, asserted in `blocks`. | all |
+| SSR-1 | n/a (profile: browser) | - | Profile `browser`: governs what the browser SDK does under server rendering, in the browser's module instance. | browser |
+| SSR-2 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| SSR-3 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| SRV-1 | provisional | mock | `e2e/example` "SPEC §13.1 — the acceptance test", on a production SvelteKit build and the served bytes: Italian body copy, `<title>`, meta description, `og:title` and a translatable `alt` present, the English absent, the base locale as the negative control, and a phrase missing from the catalog falling back and registering. On the block path, translations land where their tokens were read — attributes included — only as of this revision ("What surfaced", item 1). The example's API is a mock server. Waits on: CONF-2 shared contract fixture. | server |
+| SRV-2 | implemented | n/a (pure) | `isolation` "concurrent requests for different locales": renders interleaved across awaits, repeated, and miss queues kept per request. Mutation on record: swapping `AsyncLocalStorage` for a module global → 4 red. `e2e` "holds under 120 interleaved requests across four locales" on the built app. | server |
+| SRV-3 | provisional | mock | `harvest` "never in the TTFB path" asserts the order of events, not the outcome: 0 registrations immediately after `run()` resolves and 1 only after the drain settles, with a 50ms delay proving the render did not wait. The read-only half has a write-key positive control on the same render shape. Waits on: CONF-2 shared contract fixture. | server |
+| SRV-4 | implemented | n/a (pure) | **The server half, which is this lane's.** `e2e/example` "SRV-4 — the client is handed the catalog the server rendered with": the served `/it` page's hydration payload carries the Italian catalog and `langsysLocale` `it`, and `/de` carries its own locale and not the Italian. Mutation: delete `langsysCatalog: locals.langsysCatalog,` from `example/src/routes/+layout.server.ts` and rebuild → 2 red (L1). `run()` and `preloadCatalog()` return that catalog through `normalizeCatalog` on every path. **Not this lane's, named rather than claimed:** the synchronous seed is the browser core's, and calling it before hydration is a binding's; the example calls no seed yet, so the round trip is untested here. | server |
+| SRV-5 | partial | n/a (pure) | **Once per subtree: met.** `blocks` ".missing is a record of phrases, not of token positions": a depth-3 block holding `Repeat` four times posts it once, counted, and the returned `.missing` lists it once — it listed it four times until this revision, while registration was already right. **Fail loudly on an uncapturable child: not met.** `UncapturableChildError` is defined and exported and nothing throws it; the framework adapters that would capture children are not built. | server |
+| BIND-1 | n/a (profile: binding) | - | Profile `binding`. This package is a server SDK, not a framework binding. | binding |
+| BIND-2 | n/a (profile: binding) | - | Profile `binding`. | binding |
+| BIND-3 | n/a (profile: binding) | - | Profile `binding`. | binding |
+| BIND-4 | n/a (profile: binding) | - | Profile `binding`. | binding |
+| BIND-5 | n/a (profile: binding) | - | Profile `binding`. | binding |
+| BIND-6 | n/a (profile: binding) | - | Profile `binding`. | binding |
+| GRANT-1 | n/a (profile: browser) | - | Profile `browser`. The server posture is testable rather than absent: `build-output` asserts the shipped bundle never carries `X-Write-Grant`, and no grant surface exists, which is what keeps the GATE-3 carve-out valid. | browser |
+| GRANT-2 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| GRANT-3 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| GRANT-4 | n/a (profile: browser) | - | Profile `browser`. | browser |
+| CACHE-1 | implemented | n/a (pure) | `catalog` "CACHE-1 — keys are namespaced by project": reproduced first (project B served project A's catalog through a shared adapter), with a control that a project still reads its own copy. Mutations: drop the project id → 4 red; a constant segment → 4 red. The REG-8 clock is per instance for the same reason (B9). | all |
+| OBS-1 | provisional | mock | `harvest` "write-key gating" and the GATE-8 block: a capability refusal on a key expected to write warns once per instance, unconditionally, with the message asserted; the base SDK's `if (debug)` gate is not copied. Depends on the server answering `write_enabled: false`. Waits on: CONF-2 shared contract fixture. | all |
+| WIRE-1 | provisional | mock | `api` "request headers": `x-Authorization` on every request, GET and POST alike, plus `X-Langsys-Capabilities: icu`; never a cookie or a query parameter. Asserted on outgoing requests (see CONF-1). Waits on: CONF-2 shared contract fixture. | all |
+| WIRE-2 | provisional | mock | `api` "WIRE-2 — an empty success response is a success, not a parse error": a `204` with no body resolves `status: true`, with an empty `500` as the control; `harvest` "WIRE-2 on the drain path — a 204 from registration is a success": no failure logged and no REG-8 window opened. `send()` branches on status before parsing. Red-first, reconstructed by removing the branch: 2 red (the `api` 204 test and the drain-path test), with the empty-`500` control green. Which endpoints answer empty is the API's answer. Waits on: CONF-2 shared contract fixture. | all |
+| WIRE-3 | implemented | n/a (pure) | `api` "WIRE-3: sends lowercase xx-yy on the wire, whatever casing it was handed", and four spellings of one locale reach the wire identically. Resolved by construction on the `/pure` re-parent; `0.1.0` shipped the cased form. | all |
+| WIRE-4 | provisional | mock | **Clause 1:** `harvest` "WIRE-4 clause 1 — the translation call must never throw", checked in: a real connection refusal at `127.0.0.1:1`, `run()` + `t()` and `preloadCatalog()` both degrading, with a reachable-stub control. **Clause 2:** `harvest` "WIRE-4 clause 2 — a failed catalog fetch registers NOTHING", on the inline fetch and the preload path (`preloadCatalog()` → `run({ catalog })`, the shape `example/src/hooks.server.ts` uses), with positive controls that the same phrases do register when the catalog loads. Mutations A–H below, re-measured on this tree. Waits on: CONF-2 shared contract fixture. | all |
+| WIRE-5 | implemented | n/a (pure) | `apiUrl` is a constructor option, typed on `LangsysServerConfig` and listed in the README configuration table; `api` "URL construction" asserts the configured base is used, a trailing slash stripped, and the published host otherwise. The e2e suite points the built app at a separate mock API process and requests arrive there. The too-late failure mode is unrepresentable: there is no setter, so nothing can redirect after construction. | all |
+| CONF-1 | provisional | mock | Every `mock` row above asserts on a `fetch` stub, which CONF-1 forbids as sole evidence: GATE-1, GATE-2, GATE-5, GATE-6, GATE-8, REG-1, REG-8, REG-9, REG-10, SRV-1, SRV-3, OBS-1, WIRE-1, WIRE-2, WIRE-4. The every-path clause is met where it binds: TOK-1, TOK-3 and TOK-4 each name the paths they were proven on. Waits on: CONF-2 shared contract fixture. | all |
+| CONF-2 | implemented | n/a (pure) | Every row carries a tier from the canonical set, and `_dev_/conformance-summary.mjs` refuses a status or tier outside the vocabulary, a collapsed, duplicated, missing or foreign id, and a header citing a blob other than the one its id list came from. Controls below. | all |
+| CONF-3 | implemented | n/a (pure) | Mutations are recorded below with the exact edit, the red count, and the suite each was measured on. Equivalent mutants are recorded as such (WIRE-4 B; `scriptingEnabled: false`), and survivors with what they exposed (M7; the first REG-6 test). | all |
 
 ---
 
-## Mutation record — WIRE-4 clause 2
+## Mutation records
 
-CONF-3 wants the exact edit and its observed count, not a summary. An earlier revision of
-this file recorded three mutations by description ("force it false → 2 red") and none of
-them reproduced, because "force it false" names two different edits with different
-results. Full suite, this tree:
+CONF-3 wants the exact edit and its observed count, not a summary. Each table names the
+suite it was measured on, because the same edit gives different counts on different suites.
+
+### `<Translate>` — one shared walk (`tests/blocks.test.ts`, 34 tests)
+
+Red-first: the pre-fix applier failed 13 of the new tests. Identity: the pre-fix tokenizer
+executed against the shared walk over 21 inputs × 4 option sets — 84 comparisons, 0 differ.
 
 | # | Edit | Red |
 |---|---|---|
-| A | `src/translator.ts:103` — delete `scope.catalogAvailable && ` from the registration guard | 3 |
-| B | `src/index.ts:273` — `let catalogAvailable = true` → `false` | **0 — EQUIVALENT** |
-| C | `src/index.ts:282` — `!(CATALOG_FAILED in options.catalog)` → `true` (the preload bug, exactly as shipped) | 1 |
-| D | `src/index.ts:294` — `catalogAvailable = resolved.ok` → `= true` | 1 |
-| E | `src/index.ts:387` — `preloadCatalog` returns `resolved.catalog` unmarked | 1 |
-| F | `src/catalog.ts:238` — the `status:false` branch returns `ok: true` | 1 |
-| G | `src/catalog.ts:242` — the `throw` branch returns `ok: true` | 1 |
-| H | F **and** G together | 2 |
+| M2 | `src/tokenizer.ts` `attributeSlot` — `apply: (t) => setAttribute(element, name, t)` → `apply: () => {}` | 9 |
+| M3 | `setAttribute` — `element.attrs.find((a) => a.name === name)` → `element.attrs[0]` | 3 |
+| M4 | `walkSlots` — delete `if (isTranslationExcluded(node)) continue;` | 3 |
+| M5 | `walkSlots` — delete `if (isPhraseMarked(node)) continue;` | 1 |
+| M6 | text slot `apply` — keep the node's own whitespace → `text.value = translated` | 12 |
+| M7 | option duplicates — drop the duplicate slots | 1 — **0 at first**, see "What surfaced", item 4 |
+| M8 | `<button>` `value` slot not emitted | 1 |
+| M9 | `<input type=submit>` / `type=button` `value` slot not emitted | 1 |
+| M10 | `renderTranslateBlock` — `serialize(fragment)` → the untouched `innerHtml` | 19 |
+| M11 | CAT-2 guard — `typeof translated === 'string' && translated.length > 0` → `translated !== undefined` | 2 |
+| T1 | `tokenizeAttributes` — walk the element's own attributes (author order) instead of the constant; measured at 40 tests | 1 |
 
-**B is an equivalent mutant and is recorded as one.** The initializer is read by exactly
-one path — the base locale, which never queues a miss because a base-locale miss is not a
-miss — so flipping it is unobservable. Every other path assigns before use. Recording it as
-a kill would have been the easy wrong answer; recording it as equivalent is the useful one,
-because it says the initializer is not load-bearing and a reader should not add a test for
-it.
+### REG-8 — backoff (`tests/harvest.test.ts`, 66 tests)
 
-F and G separately are 1 red each and together 2, which is worth stating rather than
-folding into one number: the two failure branches are covered by different tests, so a
-single-branch regression is caught by exactly one of them.
+| # | Edit | Red |
+|---|---|---|
+| B1 | `RegistrationBackoff.failed` — drop the `Math.min(…, REGISTRATION_BACKOFF_CEILING_MS)` ceiling | 1 |
+| B2 | `failed` — `INITIAL_MS * 2 ** this.failures` → `INITIAL_MS` (no doubling) | 2 |
+| B3 | `succeeded` — delete the reset of `failures` and `until` | 1 |
+| B4 | `failed` — delete the in-flight guard `if (this.failures > 0 && sendToken !== this.episode) return …` | 1 |
+| B5 | `drainMissQueue` — `if (waitMs > 0)` → `if (false && waitMs > 0)` | 8 |
+| B6 | `drainMissQueue` catch — a thrown send records no failure | 1 |
+| B7 | `shouldAnnounce` — announce every skipped drain | 1 |
+| B8 | `drainMissQueue` — never announce | 1 |
+| B9 | `src/index.ts` — one process-global clock (`globalThis.__lsBackoff ??= new RegistrationBackoff()`) | 17 |
+| B10 | `flush()` — drain with a fresh `new RegistrationBackoff()` | 1 |
+| B11 | `remainingMs` — the window ends 1ms late | 6 |
+
+### REG-7 (`tests/harvest.test.ts`, 68 tests)
+
+| # | Edit | Red |
+|---|---|---|
+| R1 | `drainMissQueue` — delete `if (scope.draining) return;` | 1 |
+| R2 | the chunk loop — fire every chunk but the last without awaiting it | 1 |
+
+### SRV-4 (`tests/e2e`, 18 tests, 1 skipped by design)
+
+| # | Edit | Red |
+|---|---|---|
+| L1 | `example/src/routes/+layout.server.ts` — delete `langsysCatalog: locals.langsysCatalog,`, rebuild the example | 2 |
+
+### WIRE-4 clause 2 (full unit suite, 501 passing / 1 skipped at measurement)
+
+Re-measured on this tree. The previous record cited line numbers the file had moved away
+from and counts from an older suite (A 3, D 1, F 1, G 1, H 2); a record that does not
+reproduce is a memory.
+
+| # | Edit | Red |
+|---|---|---|
+| A | `src/translator.ts:102` — delete `scope.catalogAvailable && ` from the registration guard | 4 |
+| B | `src/index.ts:289` — `let catalogAvailable = true` → `false` | **0 — EQUIVALENT** |
+| C | `src/index.ts:298` — `!(CATALOG_FAILED in options.catalog)` → `true` (the preload bug, exactly as shipped) | 1 |
+| D | `src/index.ts:310` — `catalogAvailable = resolved.ok` → `true` | 3 |
+| E | `src/index.ts:403` — `preloadCatalog` returns `resolved.catalog` unmarked | 1 |
+| F | `src/catalog.ts:238` — the `status: false` branch returns `ok: true` | 4 |
+| G | `src/catalog.ts:242` — the `throw` branch returns `ok: true` | 2 |
+| H | F **and** G together | 6 |
+
+**B is an equivalent mutant and is recorded as one.** The initializer is read by exactly one
+path — the base locale, which never queues a miss because a base-locale miss is not a miss —
+so flipping it is unobservable. Every other path assigns before use.
+
+### The summary script (`_dev_/conformance-summary.mjs`)
+
+Run on scratch copies of the script and this file — never on the real file. Each edit is
+the smallest one that should trip exactly one check.
+
+| Edit to the copy | Flag | Exit | First line of output |
+|---|---|---|---|
+| none | `--check` | 0 | CONFORMANCE.md summary matches its rows. |
+| none | — | 0 | 79 rules across 16 families, one row each — each id exactly once |
+| HINT-3's id → `HINT-3..4`, HINT-4's row deleted | — | 2 | Rows naming more than one rule id — the canonical format is one id per row: |
+| CACHE-1's row deleted | — | 2 | Rule ids MISSING from CONFORMANCE.md: CACHE-1 |
+| REG-5's row duplicated | — | 2 | Duplicate rule ids in CONFORMANCE.md — the totals below would be meaningless: |
+| a `FOO-1` row added | — | 2 | Rows for ids NOT in the pinned spec: FOO-1 |
+| REG-11's status → `gap` | — | 2 | Status or tier outside the canonical vocabulary: |
+| CID-1's tier → `n/a (contract fixture)` | — | 2 | Status or tier outside the canonical vocabulary: |
+| the header's blob → `8e2527b9…` | — | 2 | The "Spec revision read" header does not cite blob 5c5c0723…, which is the revision this script's id list was extracted from. |
+| REG-12's status → `not implemented`, summary left as it was | `--check` | 1 | CONFORMANCE.md summary is STALE. Recompute: |
+
+Before this revision the script exited non-zero only on a duplicate, on no rows at all, or on a
+stale `--check`: a deleted row printed "78 rules" and exited 0, and a collapsed row was expanded
+rather than refused.
 
 ## Gaps, ranked by cost
 
-1. **TOK-1 `<math>` — required by 8.0.1, not excluded here.** Blocked on the core rather
-   than on effort: the exclusion list is a re-export, and going first splits ids with the
-   client SDK we hydrate over. PHP already ships it, so this is the last of the three
-   implementations to move.
-2. **GATE-2 — unknown is collapsed into refused, not held.** The rule says hold; the send
-   site consumes the batch and refuses. Cheap to fix and cheap in consequence (the scope
-   dies with the request either way), but it is a real divergence from the rule's text
-   rather than a missing test, and it was rowed as the latter until a review caught it.
-3. **MARK-1 — nothing emits a marker.** Server-rendered hosts carry no resolved id, so the
-   client-DOM parity probe cannot key on anything and `auditRenderedHtml` reports clean on
-   a page it cannot see into. 0.2.0.
-4. **SRV-5 — no component child capture.** 0.2.0, and the piece the roadmap calls the real
-   next work.
-5. **REG-8 — no retry or backoff.** A failed batch is consumed and dropped.
-6. **REG-11 — no ellipsis warning.** Nothing implemented.
-7. **SRV-4 round-trip untested.** Blocked on the core's synchronous seed.
-8. **GATE-3, CID-4, ICU-4, REG-12 have no test pointing at them.** Each is defensible by
-   reading the code, which is exactly the row CONF-1 says to distrust. (REG-6 was on this
-   list and now has one; GATE-2 moved up as a real divergence rather than a test gap.)
-9. **CONF-1 unmet fleet-wide** — the shared contract fixture does not exist, which caps
+1. **MARK-1 — nothing writes a marker.** Held by the operator. Server-rendered hosts carry no
+   resolved id, so the client-DOM parity probe cannot key on anything and
+   `auditRenderedHtml` reports clean on a page it cannot see into.
+2. **GATE-2 hold-on-unknown and REG-8 retention — one decision.** Both need a queue that
+   outlives the request, which bends this package's one invariant. Held together for the
+   operator's ruling on per-request server SDKs.
+3. **CID-4 — a legacy match is attached on id presence alone.** A collision attaches the
+   wrong block's text, and the failure looks like a translation. A behaviour change, so not
+   built this round.
+4. **SRV-5 — the fail-loud half.** `UncapturableChildError` exists and nothing throws it;
+   the framework adapters are not built.
+5. **REG-11 — no ellipsis warning.** Held.
+6. **TOK-2 — the C0 control characters.** Held for the strip ruling.
+7. **GATE-3, ICU-4 and REG-12 have no test pointing at them.** Each is defensible by reading
+   the code, which is exactly the row CONF-1 says to distrust.
+8. **ICU-1…3 and 5 rest on the core's record.** Delegated, with no test here; if the core's
+   `interpolate` regresses, nothing in this repo goes red.
+9. **CONF-1 is unmet fleet-wide.** The shared contract fixture does not exist, which caps
    every transport row at `provisional`.
 
 ## Release-wave preconditions
@@ -238,16 +329,17 @@ single-branch regression is caught by exactly one of them.
 Not conformance gaps, but they block a publish and are recorded here because this is the
 file a releaser reads. Both are written up in `ROADMAP.md` with their evidence.
 
-- **A clean checkout does not build.** The core is a *devDependency* pinned `^0.6.5`, the
-  lockfile resolves the registry tarball, and published `0.6.5` exposes no `./pure`. So
-  `npm ci` succeeds and `tsc --noEmit` fails with nine `TS2307`. CI stays red until the
-  core publishes a version carrying the subpath.
-- **Never publish from a tree that resolves the core through a symlink.** `tsup` bundles
-  the core (it is a devDependency), so a publish from a developer tree would ship a
-  snapshot of an *uncommitted working tree* with no revision recorded in the tarball.
-  There is no path leak — `dist/` contains no absolute paths, sourcemaps included — the
-  hazard is provenance, not disclosure. `_dev_/publish.sh` should refuse when
-  `node_modules/langsys-js-typescript` is a symlink.
-- **CI needs the core pinned to an immutable artifact.** The symlink couples this suite to
-  a live sibling working tree; the same `npm test` has given different answers ten minutes
+- **A clean checkout does not build.** The core is a *devDependency* pinned `^0.6.5` and the
+  lockfile resolves the registry tarball, whose published `0.6.5` exposes no `./pure`, so
+  `tsc --noEmit` fails on every `/pure` import. Still pinned `^0.6.5` at this write; the
+  compile failure itself was not re-measured in this revision. CI stays red until the core
+  publishes a version carrying the subpath.
+- **Never publish from a tree that resolves the core through a symlink.** `tsup` bundles the
+  core (it is a devDependency), so a publish from a developer tree would ship a snapshot of
+  an *uncommitted working tree* with no revision recorded in the tarball — the core tree
+  this was measured against has an uncommitted `src/translations.ts` right now. There is no
+  path leak; the hazard is provenance, not disclosure. `_dev_/publish.sh` still does not
+  refuse when `node_modules/langsys-js-typescript` is a symlink.
+- **CI needs the core pinned to an immutable artifact.** The symlink couples this suite to a
+  live sibling working tree; the same `npm test` has given different answers ten minutes
   apart with no change in this repo.

@@ -182,6 +182,11 @@ export class LangsysApi {
             return { status: false, errors: [`HTTP ${response.status} ${response.statusText}`] };
         }
 
+        // WIRE-2 — branch on STATUS before parsing. Some endpoints answer 204 with no content
+        // type and a zero-length body, and parsing that unconditionally threw on a SUCCESS: the
+        // drain logged an accepted registration as failed and, since REG-8, backed off on it.
+        if (response.status === 204) return { status: true };
+
         const json = (await response.json()) as ApiResponse;
         return json;
     }

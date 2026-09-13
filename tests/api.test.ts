@@ -230,3 +230,23 @@ describe('statelessness', () => {
         for (const call of b.calls) expect(call.url).toContain('project_id=B');
     });
 });
+
+describe('WIRE-2 — an empty success response is a success, not a parse error', () => {
+    // Measured before the fix, by execution: a 204 with no body threw `SyntaxError: Unexpected
+    // end of JSON input` out of send(), on registration and on authorize alike. So a
+    // registration the server ACCEPTED surfaced as a failure — logged as "Failed to
+    // register", and since REG-8, opening a backoff window on a success.
+    const items = [{ type: 'phrase' as const, phrase: 'x', category: '' }];
+    const answering = (status: number, statusText = '') =>
+        (async () => new Response(null, { status, statusText })) as unknown as typeof globalThis.fetch;
+
+    it('createTranslatableItems resolves status:true on a 204 with an empty body', async () => {
+        const api = new LangsysApi('p', 'k', 'http://double.test/api', answering(204));
+        await expect(api.createTranslatableItems(items)).resolves.toMatchObject({ status: true });
+    });
+
+    it('CONTROL: a 500 with an empty body is still a failure', async () => {
+        const api = new LangsysApi('p', 'k', 'http://double.test/api', answering(500, 'Server Error'));
+        await expect(api.createTranslatableItems(items)).resolves.toMatchObject({ status: false });
+    });
+});

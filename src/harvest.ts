@@ -34,6 +34,83 @@ import type { KeyType, MissingPhrase } from './types.js';
 export const DEFAULT_BATCH_LIMIT = 200;
 
 /**
+ * REG-8 — the first backoff window after a failed registration send, and its ceiling.
+ * The spec's "3s → doubling → ~5min": 3, 6, 12 … 192, then 300 from the eighth failure on.
+ */
+export const REGISTRATION_BACKOFF_INITIAL_MS = 3_000;
+export const REGISTRATION_BACKOFF_CEILING_MS = 300_000;
+
+/**
+ * One registration failure clock per `LangsysServer` instance (REG-8).
+ *
+ * **Per instance, never per module.** One process commonly hosts several servers — a
+ * project each, a tenant each — and a module-level clock would let one project's broken
+ * key silence every other project's registrations. That is CACHE-1's shape, for backoff.
+ *
+ * **Not request state either, so it does not live in the scope.** Every concurrent request
+ * to an instance sends to the same endpoint, so every one must see the same answer: a
+ * per-request clock lets each new request fire its own probe at an endpoint that is already
+ * failing, which is the storm this exists to stop. It is the same kind of fact as `keyType`
+ * and `batchLimit` — identical for every request — with one deliberate difference: it is
+ * read at DRAIN time rather than copied in at `run()`, because the point is to react to a
+ * failure that landed after this request started rendering.
+ *
+ * **Only the backoff half of REG-8.** The other half keeps a failed send queued, which
+ * needs a queue that outlives the request and is held for a spec ruling. So a phrase
+ * dropped here is not retried; it registers the next time it renders after the window.
+ */
+export class RegistrationBackoff {
+    private failures = 0;
+    private until = 0;
+    /** Bumped on each counted failure, so a send can tell one landed while it was in flight. */
+    private episode = 0;
+    private announcedEpisode = -1;
+
+    /** Milliseconds until a send may go out; 0 means now. */
+    remainingMs(): number {
+        return Math.max(0, this.until - Date.now());
+    }
+
+    get consecutiveFailures(): number {
+        return this.failures;
+    }
+
+    /** Take immediately before a send, and hand back to `failed()` if it fails. */
+    beginSend(): number {
+        return this.episode;
+    }
+
+    /** Record a failed send. Returns the milliseconds until the next send may go out. */
+    failed(sendToken: number): number {
+        // A send that was already in flight when an earlier failure opened this window is
+        // the SAME outage, not a consecutive failure. Counting it would double the window
+        // once per concurrent request, so the delay would measure traffic, not failures.
+        if (this.failures > 0 && sendToken !== this.episode) return this.remainingMs();
+        const delay = Math.min(
+            REGISTRATION_BACKOFF_INITIAL_MS * 2 ** this.failures,
+            REGISTRATION_BACKOFF_CEILING_MS,
+        );
+        this.failures++;
+        this.episode++;
+        this.until = Date.now() + delay;
+        return delay;
+    }
+
+    /** The first success resets to a fresh 3s ladder. */
+    succeeded(): void {
+        this.failures = 0;
+        this.until = 0;
+    }
+
+    /** True for the first skipped drain of a window, false for the rest of it. */
+    shouldAnnounce(): boolean {
+        if (this.announcedEpisode === this.episode) return false;
+        this.announcedEpisode = this.episode;
+        return true;
+    }
+}
+
+/**
  * Queue a miss on the CURRENT request's queue, deduplicated.
  *
  * The base SDK deduplicates with an O(n) linear scan per miss over an array that, under
@@ -174,6 +251,7 @@ export async function drainMissQueue(
     scope: RequestScope,
     api: LangsysApi,
     enabled: boolean,
+    backoff: RegistrationBackoff,
 ): Promise<void> {
     // A concurrency guard, not a once-only latch. `run()` schedules a drain and the
     // caller may also `flush()`; both must be safe, and a LATER drain must remain
@@ -193,6 +271,27 @@ export async function drainMissQueue(
         // refuses again, turning a read-only key into a scheduling loop.
         scope.posted = scope.missQueue.length;
         scope.drained = true;
+        return;
+    }
+
+    // REG-8 — this instance is backing off after a failed send, so nothing goes out. The
+    // batch is consumed exactly as a refusal consumes it, and for the same reason: a late
+    // miss must not re-trigger a drain that will only decline again.
+    const waitMs = backoff.remainingMs();
+    if (waitMs > 0) {
+        scope.posted = scope.missQueue.length;
+        scope.drained = true;
+        // Once per window. Under traffic every render in the window lands here, and a line
+        // per render would bury the failure that opened it.
+        if (backoff.shouldAnnounce()) {
+            scope.logger.warn(
+                `Registration is backing off for ${Math.ceil(waitMs / 1000)}s after ` +
+                    `${backoff.consecutiveFailures} consecutive failed send(s). ${batch.length} ` +
+                    'phrase(s) from this render were not sent, and phrases from other renders in ' +
+                    'this window will not be either, without another warning. They are not ' +
+                    'retained: each registers the next time it renders after the window.',
+            );
+        }
         return;
     }
 
@@ -218,11 +317,14 @@ export async function drainMissQueue(
     // reader's `>= 1` guard away — the mutation did not fail the suite, it HUNG it, which
     // is how the same regression would present in production.
     const stride = Math.max(1, Math.floor(scope.batchLimit) || 1);
+    let sendToken = backoff.beginSend();
     try {
         for (let offset = 0; offset < items.length; offset += stride) {
             const chunk = items.slice(offset, offset + stride);
+            sendToken = backoff.beginSend();
             const response = await api.createTranslatableItems(chunk);
             if (!response.status) {
+                const pausedMs = backoff.failed(sendToken);
                 // Fire-and-forget is about not blocking the response. It is not about
                 // discarding the outcome — a harvest that silently fails looks identical
                 // to one that succeeded, and the phrases just never appear.
@@ -233,16 +335,23 @@ export async function drainMissQueue(
                 scope.logger.error(
                     `Failed to register ${chunk.length} phrase(s)` +
                         (sent > 0 ? ` after ${sent} already registered` : '') +
-                        `; ${items.length - sent - chunk.length} more not attempted`,
+                        `; ${items.length - sent - chunk.length} more not attempted` +
+                        `; registration paused for ${Math.ceil(pausedMs / 1000)}s`,
                     response.errors,
                 );
                 return;
             }
             sent += chunk.length;
+            backoff.succeeded();
         }
         scope.logger.log(`Registered ${sent} phrase(s) for "${scope.locale}"`);
     } catch (err) {
-        scope.logger.error(`Failed to register ${items.length - sent} phrase(s)`, err);
+        const pausedMs = backoff.failed(sendToken);
+        scope.logger.error(
+            `Failed to register ${items.length - sent} phrase(s); registration paused for ` +
+                `${Math.ceil(pausedMs / 1000)}s`,
+            err,
+        );
     } finally {
         scope.draining = false;
         scope.drained = true;

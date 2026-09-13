@@ -13,7 +13,7 @@
 import { LangsysApi, DEFAULT_API_URL } from './api.js';
 import { CatalogStore, DEFAULT_TTL_SECONDS, normalizeCatalog } from './catalog.js';
 import { runInScope, type RequestScope } from './context.js';
-import { DEFAULT_BATCH_LIMIT, drainMissQueue, scheduleDrain } from './harvest.js';
+import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, drainMissQueue, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
 import { canonicalizeLocale } from 'langsys-js-typescript/pure';
 import type {
@@ -180,6 +180,12 @@ export class LangsysServer {
      * request.
      */
     private lastAuthorizeAt = 0;
+    /**
+     * REG-8's failure clock — one per instance, never per module, and never in the scope.
+     * The one server fact here that is read at drain time rather than copied in at `run()`;
+     * `RegistrationBackoff` explains why each of those alternatives is wrong.
+     */
+    private readonly registrationBackoff = new RegistrationBackoff();
 
     constructor(config: LangsysServerConfig) {
         if (!config.projectId) throw new Error('createLangsysServer: `projectId` is required');
@@ -331,7 +337,7 @@ export class LangsysServer {
         // Phrases discovered after the scheduled drain — a streamed body still rendering
         // after `run()` resolved — schedule their own drain rather than being dropped.
         scope.onLateMiss = () => {
-            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled));
+            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff));
         };
 
         // A render that throws must still harvest. Without the `finally`, a page that
@@ -342,7 +348,7 @@ export class LangsysServer {
         try {
             value = await runInScope(scope, async () => fn());
         } finally {
-            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled));
+            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff));
         }
 
         return { value, catalog, locale, missing: scope.missQueue, [SCOPE]: scope };
@@ -369,7 +375,7 @@ export class LangsysServer {
             return Promise.resolve();
         }
 
-        return drainMissQueue(scope, this.api, this.harvestEnabled);
+        return drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff);
     }
 
     /**

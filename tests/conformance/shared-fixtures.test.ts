@@ -32,27 +32,30 @@ import { generateCustomId, tokenizeHtml } from '../../src/index.js';
  * the spec and this repo's prose both call the project `langsys-php`, and the two are the
  * same thing.
  *
- * Pinned provenance: blob `60dc9b33ecfd5fa3256fca7d36063ceb8ef1a00a`, last written by
- * `8862841` ("Pin the canonical serialization at three flags; lock U+2028 with a fixture
- * row").
+ * Pinned provenance: blob `633a09d9e1abd81bb1b77a7d861ff9328d734a48`, last written by
+ * `65c2221` ("Write invisible characters as escapes, and retire a gate that had come
+ * true"). Was `60dc9b33` at `8862841`; thirteen rows both times.
  */
 const PHP_FIXTURE = new URL(
     '../../../langsys-php-sdk/tests/fixtures/custom-id-reference.json',
     import.meta.url,
 );
-const PHP_FIXTURE_BLOB = '60dc9b33ecfd5fa3256fca7d36063ceb8ef1a00a';
+const PHP_FIXTURE_BLOB = '633a09d9e1abd81bb1b77a7d861ff9328d734a48';
 
 /**
  * The core's, reached through the same `node_modules` symlink the walker-parity suite
- * uses. Pinned provenance: blob `e4c1f185974fbf2ebda6154f36b8ed7416f1d7fa`, written by
- * `6596faf` ("Stop harvesting noscript, and prove the ids agree across the SDKs").
+ * uses. Provenance at this write: blob `5e9866c1579578ed2f0d4069deb4e1fe8330fb39`, written by
+ * `a18e4a3` ("Rewrite the conformance record in the canonical format, and prove SSR cases
+ * in isolation"). Recorded, deliberately NOT asserted: the core rewrites this file's prose
+ * without moving a row (`1ae7bc29` at `6314f08` also had twenty-six cases), so the pins are
+ * the spec blob and the row count below, and every row is asserted on its own.
  */
 const CORE_FIXTURE = new URL(
     '../../node_modules/langsys-js-typescript/tests/fixtures/canonicalization-reference.json',
     import.meta.url,
 );
 /** The spec blob the core measured its rows against. */
-const CORE_FIXTURE_SPEC_BLOB = '8e2527b9f30e4e8a38121eeb7c401d4db60dfa6c';
+const CORE_FIXTURE_SPEC_BLOB = '5c5c0723f88fb8e6b13f58876c7adca8b6b35691';
 
 const phpPresent = existsSync(PHP_FIXTURE);
 const corePresent = existsSync(CORE_FIXTURE);
@@ -150,11 +153,11 @@ describe.skipIf(!corePresent)('langsys-js-typescript canonicalization-reference.
         expect(coreFixture.spec_blob ?? '').toContain(CORE_FIXTURE_SPEC_BLOB);
     });
 
-    it('has the twenty-three rows the core authored', () => {
-        // Was 19 against spec blob b657b490. Grew with 8.0.1, and the pin above fired on
-        // the spec_blob change rather than letting superseded expectations pass quietly —
-        // which is the whole reason that assertion exists.
-        expect(coreFixture.cases).toHaveLength(23);
+    it('has the twenty-six rows the core authored', () => {
+        // Was 19 against spec blob b657b490, then 23 against 8e2527b9. Each time the pin
+        // above fired on the spec_blob change rather than letting superseded expectations
+        // pass quietly — which is the whole reason that assertion exists.
+        expect(coreFixture.cases).toHaveLength(26);
     });
 
     it.each(coreFixture.cases.map((c) => [c.id, c] as const))('%s', (_id, row) => {

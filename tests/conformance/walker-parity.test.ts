@@ -249,39 +249,30 @@ describe('TOK-1 — noscript is EXCLUDED, and the parser contract is still pinne
 });
 
 
-describe('TOK-1 — <math> is required by 8.0.1 and this package does NOT exclude it yet', () => {
+describe('TOK-1 — <math> is excluded, and it arrived through the core re-export', () => {
     /**
-     * **A gap recorded as a gap, with a test that flips when it closes.** Spec 8.0.1 adds
-     * `<math>` to TOK-1's exclusion list. `langsys-php` already ships it
-     * (`NON_PROSE_ELEMENTS` at `e28972c`, measured by executing `extractPhrases`). The
-     * JS core does not, and `SKIP_ELEMENTS` here is a re-export of the core's list — so
-     * this package does not either.
+     * **This was a gap test, and it fired as designed.** Spec 8.0.1 added `<math>` to
+     * TOK-1's exclusion list while the JS core still tokenized it, and `SKIP_ELEMENTS` here
+     * re-exports the core's list rather than keeping its own. Overriding the re-export would
+     * have made this package disagree with its own hydration partner on every block holding
+     * a `<math>`, so the gap was recorded as a test asserting the CURRENT output, and that
+     * test went red when the core shipped the exclusion (`105943f`). The noscript ordering
+     * again — core first, then here — and nothing in `src/` had to change.
      *
-     * **Not fixed unilaterally, deliberately.** Overriding the re-export would make this
-     * package disagree with its own hydration partner on every block containing a
-     * `<math>`: we would derive one id, the client core another, for the same DOM on the
-     * same request. That is the noscript ordering exactly, and it went the right way round
-     * then — core first, then here. CLAUDE.md rule 3 is the standing form of it.
+     * The expectation is not derived from this package. It is the spec 8.0.1 vector, which
+     * `langsys-php` already produced by executing `extractPhrases` (`e28972c`):
      *
-     * Measured three ways on `<p>Area <math><mi>x</mi><mo>+</mo><mn>2</mn></math> units</p>`:
+     *   spec 8.0.1 requires        ['Area', 'units']
+     *   langsys-php gives          ['Area', 'units']
+     *   this package, before       ['Area', 'x', '+', '2', 'units']
      *
-     *   spec 8.0.1 requires   ['Area', 'units']
-     *   langsys-php gives     ['Area', 'units']      (already conformant)
-     *   this package gives    ['Area', 'x', '+', '2', 'units']
-     *
-     * When the core ships it this test goes red, which is the signal to move — the same
-     * shape as the attribute-list pin that fired when the twenty-seven landed.
+     * The render path is pinned beside the substitution tests in `tests/blocks.test.ts`.
      */
     const MATH = '<p>Area <math><mi>x</mi><mo>+</mo><mn>2</mn></math> units</p>';
 
-    it('currently tokenizes math content — and must stop when the core does', () => {
-        expect(
-            SKIP_ELEMENTS_FOR_TEST.includes('math'),
-            'The core now excludes <math>. Delete this test, and the TOK-1 gap row in ' +
-                'CONFORMANCE.md, and re-measure the corpus — the exclusion arrives ' +
-                'automatically through the re-export.',
-        ).toBe(false);
-        expect(tokenizeHtml(MATH)).toEqual(['Area', 'x', '+', '2', 'units']);
+    it('excludes math content — the spec vector, arriving through the re-export', () => {
+        expect(SKIP_ELEMENTS_FOR_TEST).toContain('math');
+        expect(tokenizeHtml(MATH)).toEqual(['Area', 'units']);
     });
 
     it('CONTROL: <svg> text IS tokenized, and that is correct, not the same gap', () => {

@@ -7,7 +7,7 @@
  * without an assertion.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLangsysServer, t } from '../src/index.js';
 import { __resetWarnOnce } from '../src/logger.js';
 import type { SharedCache } from '../src/types.js';
@@ -53,6 +53,12 @@ function harness(
     let registerCalls = 0;
     let authorizeCalls = 0;
     let catalogWriteEnabled = opts.catalogWriteEnabled;
+    // Mutable, so an endpoint that fails and then recovers can be modelled (REG-8).
+    let registerFails = opts.registerFails;
+    let registerThrows = false;
+    let registerNoContent = false;
+    let inFlight = 0;
+    let maxInFlight = 0;
 
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
         const href = String(url);
@@ -72,10 +78,17 @@ function harness(
 
         if (href.includes('translatable-items')) {
             registerCalls++;
+            inFlight++;
+            maxInFlight = Math.max(maxInFlight, inFlight);
             if (opts.registerDelayMs) await new Promise((r) => setTimeout(r, opts.registerDelayMs));
+            // Nothing below awaits before returning, so the send has ended here.
+            inFlight--;
+            if (registerThrows) throw new Error('network down');
             const body = JSON.parse(String(init?.body)) as { translatable_items: Registered[] };
             registered.push(body.translatable_items);
-            if (opts.registerFails) {
+            // WIRE-2: an accepted registration answered with no content at all.
+            if (registerNoContent) return new Response(null, { status: 204 });
+            if (registerFails) {
                 return new Response(JSON.stringify({ status: false, errors: ['nope'] }), {
                     status: 200,
                     headers: { 'content-type': 'application/json' },
@@ -120,6 +133,10 @@ function harness(
         registerCalls: () => registerCalls,
         authorizeCalls: () => authorizeCalls,
         setCatalogWriteEnabled: (v: boolean | undefined) => (catalogWriteEnabled = v),
+        setRegisterFails: (v: boolean) => (registerFails = v),
+        setRegisterThrows: (v: boolean) => (registerThrows = v),
+        maxInFlight: () => maxInFlight,
+        setRegisterNoContent: (v: boolean) => (registerNoContent = v),
     };
 }
 
@@ -781,6 +798,231 @@ describe('fire-and-forget, but not silent', () => {
     });
 });
 
+describe('REG-7 — one send in flight at a time, per queue', () => {
+    /**
+     * The spec gives this rule a title and no body, so the server reading is stated rather
+     * than assumed: ONE QUEUE never has two sends in flight. This SDK keeps a queue per
+     * request, so two concurrent requests to one instance can each have a send in flight —
+     * the REG-8 in-flight test depends on exactly that — and the rule is met per queue,
+     * which is the unit that can race its own bookkeeping (REG-6).
+     */
+    it('sends a chunked queue one chunk at a time, never overlapping', async () => {
+        const h = harness({ batchLimit: 1, registerDelayMs: 30 });
+        await h.langsys.run({ locale: 'it' }, () => {
+            t('One');
+            t('Two');
+            t('Three');
+        });
+        await new Promise((r) => setTimeout(r, 200));
+        expect(h.registerCalls(), 'the queue must actually have been chunked').toBe(3);
+        expect(h.maxInFlight()).toBe(1);
+    });
+
+    it('a flush() while that queue is still sending waits, rather than overlapping', async () => {
+        const h = harness({ registerDelayMs: 60 });
+        let lateDone!: () => void;
+        const late = new Promise<void>((r) => (lateDone = r));
+        const result = await h.langsys.run({ locale: 'it' }, () => {
+            t('First');
+            // Inside the scope, so it lands on the same queue while First is still in flight.
+            setTimeout(() => {
+                t('Second');
+                lateDone();
+            }, 20);
+        });
+        await late;
+        await h.langsys.flush(result); // First is still in flight: this must not send
+        await new Promise((r) => setTimeout(r, 150));
+        await h.langsys.flush(result); // First has settled: Second goes now
+        await new Promise((r) => setTimeout(r, 150));
+        expect(h.registered.flat().map((i) => i.phrase)).toEqual(['First', 'Second']);
+        expect(h.maxInFlight()).toBe(1);
+    });
+});
+
+describe('REG-8 — a failed send backs off, per instance', () => {
+    /**
+     * The backoff half only. REG-8's other half — a failed send STAYS QUEUED — needs state
+     * that outlives the request and is held for a spec ruling. So a phrase dropped by a
+     * failed or skipped send is not retried; it re-registers the next time it renders
+     * after the window.
+     *
+     * Only `Date` is faked. `setTimeout` and `setImmediate` stay real, because the drain
+     * is scheduled on one and the stub's in-flight delay is the other; faking those too
+     * would make these tests about the fake.
+     */
+    const T0 = Date.UTC(2026, 0, 1);
+    const at = (ms: number) => vi.setSystemTime(T0 + ms);
+    type H = ReturnType<typeof harness>;
+    const render = async (h: H, phrase: string) => {
+        await h.langsys.run({ locale: 'it' }, () => t(phrase));
+        await settleDrain();
+    };
+    const sent = (h: H) => h.registered.flat().map((i) => i.phrase);
+    /** An instance whose first send failed at T0, with the endpoint healthy again. */
+    const failedOnce = async () => {
+        const h = harness({ registerFails: true });
+        at(0);
+        await render(h, 'Doomed');
+        expect(h.registerCalls(), 'the failing send must actually have gone out').toBe(1);
+        h.setRegisterFails(false);
+        return h;
+    };
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        at(0);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('sends nothing inside the 3s window after a failed send', async () => {
+        const h = await failedOnce();
+        at(2_999);
+        await render(h, 'TooSoon');
+        expect(h.registerCalls()).toBe(1);
+        expect(sent(h)).not.toContain('TooSoon');
+    });
+
+    it('POSITIVE CONTROL: sends again the moment the window ends', async () => {
+        const h = await failedOnce();
+        at(3_000);
+        await render(h, 'Probe');
+        expect(sent(h)).toContain('Probe');
+    });
+
+    it('doubles the window on each consecutive failure', async () => {
+        const h = harness({ registerFails: true });
+        await render(h, 'First'); // fails at 0s -> window to 3s
+        at(3_000);
+        await render(h, 'Second'); // fails at 3s -> 6s window, nothing until 9s
+        expect(h.registerCalls(), 'the second failing send must have gone out').toBe(2);
+        h.setRegisterFails(false);
+        at(8_999);
+        await render(h, 'TooSoon');
+        expect(sent(h)).not.toContain('TooSoon');
+        at(9_000);
+        await render(h, 'OnTime');
+        expect(sent(h)).toContain('OnTime');
+    });
+
+    it('stops doubling at the 5 minute ceiling', async () => {
+        const h = harness({ registerFails: true });
+        // 3s * 2^7 would be 384s: the eighth window is the first the ceiling cuts.
+        const windows = [3_000, 6_000, 12_000, 24_000, 48_000, 96_000, 192_000, 300_000];
+        let now = 0;
+        await render(h, 'Fail 1');
+        for (let i = 1; i < windows.length; i++) {
+            now += windows[i - 1]!;
+            at(now);
+            await render(h, `Fail ${i + 1}`);
+        }
+        // Positive evidence that every probe went out exactly when its window ended.
+        expect(h.registerCalls()).toBe(windows.length);
+        h.setRegisterFails(false);
+        at(now + 299_999);
+        await render(h, 'Early');
+        expect(sent(h)).not.toContain('Early');
+        at(now + 300_000);
+        await render(h, 'Capped');
+        expect(sent(h)).toContain('Capped');
+    });
+
+    it('resets to 3s on the first success', async () => {
+        const h = await failedOnce();
+        at(3_000);
+        await render(h, 'Recovered');
+        expect(sent(h)).toContain('Recovered');
+        h.setRegisterFails(true);
+        await render(h, 'FailsAgain'); // a FIRST failure again -> 3s, not 6s
+        expect(h.registerCalls()).toBe(3);
+        h.setRegisterFails(false);
+        at(5_999);
+        await render(h, 'TooSoon');
+        expect(sent(h)).not.toContain('TooSoon');
+        at(6_000);
+        await render(h, 'Back');
+        expect(sent(h)).toContain('Back');
+    });
+
+    it('a registration that THROWS backs off too', async () => {
+        const h = harness();
+        h.setRegisterThrows(true);
+        await render(h, 'Thrown');
+        expect(h.registerCalls()).toBe(1);
+        h.setRegisterThrows(false);
+        at(2_999);
+        await render(h, 'TooSoon');
+        expect(h.registerCalls()).toBe(1);
+    });
+
+    it('holds on the flush() path too, not only the scheduled drain', async () => {
+        const h = await failedOnce();
+        at(1_000);
+        const result = await h.langsys.run({ locale: 'it' }, () => t('Flushed'));
+        await h.langsys.flush(result);
+        await settleDrain();
+        expect(h.registerCalls()).toBe(1);
+    });
+
+    it('is per INSTANCE: one project failing does not throttle another in the same process', async () => {
+        // A module-level clock would let one tenant's broken key silence every other
+        // tenant's registrations — CACHE-1's shape, for backoff.
+        const failing = await failedOnce();
+        const healthy = harness();
+        at(1_000);
+        await render(healthy, 'Tenant B');
+        await render(failing, 'Tenant A');
+        expect(sent(healthy)).toContain('Tenant B');
+        // Positive evidence the window was live at that moment, or B passing means nothing.
+        expect(sent(failing)).not.toContain('Tenant A');
+    });
+
+    it('sends already in flight when the first one fails count as ONE failure, not two', async () => {
+        const h = harness({ registerFails: true, registerDelayMs: 50 });
+        await Promise.all([
+            h.langsys.run({ locale: 'it' }, () => t('Concurrent A')),
+            h.langsys.run({ locale: 'it' }, () => t('Concurrent B')),
+        ]);
+        await new Promise((r) => setTimeout(r, 150));
+        // Two calls proves both left before either failed; a skipped second send is 1.
+        expect(h.registerCalls(), 'both sends must have been in flight together').toBe(2);
+        h.setRegisterFails(false);
+        at(3_000);
+        await render(h, 'After');
+        // This stub holds every send 50ms and records it only after, so settleDrain's 20ms
+        // is not enough here. The first version asserted too early and was red for that
+        // reason alone, on code with no backoff at all — a red that proved nothing.
+        await new Promise((r) => setTimeout(r, 100));
+        expect(sent(h)).toContain('After');
+    });
+
+    it('is not silent: warns once per window, saying what was dropped', async () => {
+        const warnings = () =>
+            vi
+                .mocked(console.warn)
+                .mock.calls.map((c) => c.join(' '))
+                .filter((m) => m.includes('backing off'));
+        const h = await failedOnce();
+        at(1_000);
+        await render(h, 'Skipped 1');
+        expect(warnings()).toHaveLength(1);
+        expect(warnings()[0]).toMatch(/\b1 phrase/);
+        at(2_000);
+        await render(h, 'Skipped 2');
+        expect(warnings(), 'once per window, not once per render').toHaveLength(1);
+        h.setRegisterFails(true);
+        at(3_000);
+        await render(h, 'Fails again');
+        at(4_000);
+        await render(h, 'Skipped 3');
+        expect(warnings(), 'a NEW window announces itself').toHaveLength(2);
+    });
+});
+
 describe('flush() for edge runtimes', () => {
     it('drains synchronously when awaited, for ctx.waitUntil', async () => {
         const h = harness();
@@ -907,5 +1149,30 @@ describe('a render that throws still harvests', () => {
 
         await settleDrain();
         expect(h.registered.flat().map((i) => i.phrase)).toEqual(['Phrase before the boom']);
+    });
+});
+
+describe('WIRE-2 on the drain path — a 204 from registration is a success', () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(Date.UTC(2026, 0, 1));
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('logs no failure and opens no backoff window', async () => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const h = harness();
+        h.setRegisterNoContent(true);
+        await h.langsys.run({ locale: 'it' }, () => t('Accepted'));
+        await settleDrain();
+        expect(h.registerCalls(), 'the 204 send must actually have gone out').toBe(1);
+        const failures = error.mock.calls.map((c) => c.join(' ')).filter((m) => m.includes('Failed to register'));
+        expect(failures).toEqual([]);
+        // Same instant, so this is inside any window a mistaken failure would have opened.
+        await h.langsys.run({ locale: 'it' }, () => t('Next'));
+        await settleDrain();
+        expect(h.registered.flat().map((i) => i.phrase)).toContain('Next');
     });
 });

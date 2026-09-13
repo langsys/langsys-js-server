@@ -350,3 +350,105 @@ describe('TOK-5 — `%name%` is accepted as the escape for `{name}`', () => {
         expect(out.value).toBe('Save 20%off% today');
     });
 });
+
+describe('ICU-1/2/3/5 — recovery through THIS package\'s t(), on every path', () => {
+    /**
+     * `interpolate` is the core's, and importing it proves the function, not the call path
+     * into it (CONF-1's every-path clause). The path is where the sibling server cores broke:
+     * Ruby's `Client#interpolate` returned early on empty params, so `t('Welcome')` rendered
+     * raw ICU source, and PHP measured that re-adding the same short-circuit left its suite
+     * green. Expectations come from the spec's rule text and the cross-SDK fixture rows, not
+     * from calling `interpolate` here.
+     */
+    const SELECT = '{g, select, male {He} female {She} other {They}} left';
+    const PLURAL = '{count, plural, one {# item} other {# items}}';
+    const server = (baseLocale: string, catalog: Record<string, unknown> = {}) =>
+        createLangsysServer({
+            projectId: 'p',
+            apiKey: 'k',
+            baseLocale,
+            harvest: false,
+            fetch: (async (url: string | URL) =>
+                new Response(
+                    JSON.stringify(
+                        String(url).includes('authorize-project')
+                            ? { status: true, data: { key_type: 'read' } }
+                            : { status: true, data: catalog },
+                    ),
+                    { status: 200, headers: { 'content-type': 'application/json' } },
+                )) as unknown as typeof globalThis.fetch,
+        });
+    const inScope = async <T>(fn: () => T, baseLocale = 'en', locale = baseLocale, catalog?: Record<string, unknown>) =>
+        (await server(baseLocale, catalog).run({ locale }, fn)).value;
+
+    it('ICU-1: an EMPTY params map renders its other branch', async () => {
+        expect(await inScope(() => t(SELECT, {}))).toBe('They left');
+    });
+
+    it('ICU-2: a null argument is absent on the t() path, not the string "null"', async () => {
+        expect(await inScope(() => t(SELECT, { g: null } as never))).toBe('They left');
+    });
+
+    it('ICU-5: a supplied plural keeps CLDR selection beside a missing select (ru, n=3 is few)', async () => {
+        // Distinct words per branch, so a simplified renderer that picks `other` for 3 fails
+        // rather than landing on the same text.
+        const phrase = '{g, select, other {X}} {n, plural, one {# one} few {# few} many {# many} other {# other}}';
+        expect(await inScope(() => t(phrase, { n: 3 }), 'ru')).toBe('X 3 few');
+    });
+
+    it('CONTROL: plain text with no params comes back unchanged', async () => {
+        expect(await inScope(() => t('Hello there'))).toBe('Hello there');
+    });
+
+    it('CONTROL: plain text carrying braces or apostrophes, with no params, is left exactly as written', async () => {
+        // The risk in fixing ICU-1 by always interpolating: prose that merely LOOKS like
+        // syntax — an unbalanced brace, an apostrophe, a doubled brace, a placeholder with no
+        // param — must not be reformatted or throw into the render path.
+        const prose = ["Don't stop", "It's 5 o'clock", 'Price: {', '50% {off', 'a } b', 'Use {{double}} braces', "'{literal}'", 'Hello {name}'];
+        expect(await inScope(() => prose.map((p) => t(p)))).toEqual(prose);
+    });
+
+    describe('ICU-1 GAP — with NO params, t() skips interpolation, matching the client core until both move', () => {
+        /**
+         * **A gap recorded as a gap, with tests that flip when it closes.** ICU-1 says a missing
+         * argument renders `other`. With no params at all, `t()` returns the raw ICU source on
+         * every path below — measured. The client core does the same, executed at
+         * `langsys-js-typescript` `a18e4a3`: `Translations.t(select)` returns the source, and
+         * `<Translate>`'s `applyParams` returns early on empty params. An empty map interpolates
+         * on both sides, which is why the tests above pass.
+         *
+         * **Not fixed here first, deliberately.** Served HTML rendering `other` while the first
+         * client render shows the raw source is a hydration mismatch on every such string — the
+         * `<noscript>` and `<math>` ordering again: core first, then here. This side's fix is two
+         * lines, passing `params ?? {}` on both returns (the core's `interpolate` throws on
+         * `undefined`), and applying it turns exactly these five red. When the core ships its
+         * half, flip each to the value in its message and regrade ICU-1 and ICU-3.
+         */
+        const FLIP = (fixed: string) =>
+            `t() now interpolates with no params. That is only correct once the client core does too; ` +
+            `then expect ${JSON.stringify(fixed)} and regrade ICU-1 and ICU-3.`;
+
+        it('a select with no params returns the ICU source (fixed: its other branch)', async () => {
+            expect(await inScope(() => t(SELECT)), FLIP('They left')).toBe(SELECT);
+        });
+
+        it('the category overload with no params, the same', async () => {
+            expect(await inScope(() => t(SELECT, 'cat')), FLIP('They left')).toBe(SELECT);
+        });
+
+        it('a plural with no params returns the source (fixed: {count} items)', async () => {
+            expect(await inScope(() => t(PLURAL)), FLIP('{count} items')).toBe(PLURAL);
+        });
+
+        it('on a catalog hit, the translation comes back as ICU source (fixed: its other branch)', async () => {
+            const translated = '{g, select, male {Lui} female {Lei} other {Loro}} è uscito';
+            const catalog = { __uncategorized__: { [SELECT]: translated } };
+            expect(await inScope(() => t(SELECT), 'en', 'it', catalog), FLIP('Loro è uscito')).toBe(translated);
+        });
+
+        it('outside a request scope, the same', () => {
+            vi.spyOn(console, 'warn').mockImplementation(() => {});
+            expect(t(SELECT), FLIP('They left')).toBe(SELECT);
+        });
+    });
+});

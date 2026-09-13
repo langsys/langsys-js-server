@@ -23,9 +23,9 @@
  * `it.each` exist at all — vitest needs the list before it can build the tests.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
-import { generateCustomId, tokenizeHtml } from '../../src/index.js';
+import { createLangsysServer, generateCustomId, t, tokenizeHtml } from '../../src/index.js';
 
 /**
  * `langsys-php-sdk`, via a sibling checkout. Note the directory is `langsys-php-sdk`;
@@ -169,5 +169,74 @@ describe.skipIf(!corePresent)('langsys-js-typescript canonicalization-reference.
     it('NEGATIVE CONTROL: the corpus can disagree', () => {
         const row = coreFixture.cases[0];
         expect(tokenizeHtml(`<p>definitely not ${row.html}</p>`)).not.toEqual(row.expected_tokens);
+    });
+});
+
+// ---------------------------------------------------------------------------
+/**
+ * `langsys-php-sdk`'s `interpolation-reference.json`, driven through THIS package's `t()`.
+ *
+ * The core asserts these rows against its own `interpolate`, which proves the function. It
+ * does not prove the path a server SDK takes into it — and that path is where two sibling
+ * server cores broke with a correct renderer underneath. So each row renders through
+ * `run()` + `t()` in its own locale, exactly as an integrator's call would.
+ *
+ * Pinned provenance: blob `d369bd185ca284ba75843431e4302c08628f2245`, written by `5403824`
+ * ("Add interpolation reference fixtures, the third cross-SDK contract"); the core vendors
+ * the same blob.
+ */
+const PHP_INTERPOLATION_FIXTURE = new URL(
+    '../../../langsys-php-sdk/tests/fixtures/interpolation-reference.json',
+    import.meta.url,
+);
+const PHP_INTERPOLATION_FIXTURE_BLOB = 'd369bd185ca284ba75843431e4302c08628f2245';
+const interpolationPresent = existsSync(PHP_INTERPOLATION_FIXTURE);
+
+interface InterpolationRow {
+    description: string;
+    template: string;
+    params: Record<string, unknown>;
+    locale: string;
+    expected: string;
+}
+const interpolationRows: InterpolationRow[] = interpolationPresent
+    ? (JSON.parse(readFileSync(PHP_INTERPOLATION_FIXTURE, 'utf8')) as InterpolationRow[])
+    : [];
+
+describe('langsys-php-sdk interpolation-reference.json, through this package\'s t()', () => {
+    beforeEach(() => {
+        // Rows that supply a param the template does not use trip the unmatched-param
+        // warning, which is correct and not what these rows assert.
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('is checked out, and is the blob this package is pinned to', () => {
+        expect(interpolationPresent, `Expected ${PHP_INTERPOLATION_FIXTURE.pathname}.`).toBe(true);
+        const { createHash } = require('node:crypto') as typeof import('node:crypto');
+        const raw = readFileSync(PHP_INTERPOLATION_FIXTURE);
+        const blob = createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex');
+        expect(blob).toBe(PHP_INTERPOLATION_FIXTURE_BLOB);
+        expect(interpolationRows).toHaveLength(19);
+    });
+
+    it.each(interpolationRows.map((r) => [r.description, r] as const))('%s', async (_d, row) => {
+        const langsys = createLangsysServer({
+            projectId: 'p',
+            apiKey: 'k',
+            // The row's locale as the BASE locale, so no catalog is fetched and `t()` renders
+            // the template itself, interpolated in that locale.
+            baseLocale: row.locale,
+            harvest: false,
+            fetch: (async () =>
+                new Response(JSON.stringify({ status: true, data: { key_type: 'read' } }), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                })) as unknown as typeof globalThis.fetch,
+        });
+        const rendered = await langsys.run({ locale: row.locale }, () => t(row.template, row.params as never));
+        expect(rendered.value).toBe(row.expected);
     });
 });

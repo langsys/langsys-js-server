@@ -8,7 +8,7 @@
 | **Spec revision read** | langsys2 5cff03a1…, docs/sdk-spec.mdx blob 5c5c0723f88fb8e6b13f58876c7adca8b6b35691 (specVersion 8.0.1). Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree 5cff03a1 docs/sdk-spec.mdx` at this write. The 79 rule ids are pinned to this blob in `_dev_/conformance-summary.mjs`, which exits 2 if this line cites a different one |
 | **SDK revision** | `feature/838_write_key_gating` at this commit, cut from `origin/main` `5f37284` |
 | **Core** | `langsys-js-typescript/pure` from the sibling checkout at **`a18e4a3`**, resolved through a `node_modules` symlink. Its `/pure` import graph (`identity`, `locale`, `interpolate`, `utils`) is unchanged since `4eac870`: the two commits between touch `src/translate.ts` only, and the uncommitted `src/translations.ts` in that tree is not reachable from `src/pure.ts`. Checked with `git diff --stat 4eac870..a18e4a3 -- src`, not assumed — an earlier revision of this file named a core commit the symlink had already left |
-| **Suite** | 508 passing, 1 skipped, 14 files (`npm test`, after `npm run build`). Plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, 17 e2e passing with 1 skipped by design, and tarball acceptance, whose digest `1f284758e5ac3f6dbbb31a642252ca8c` is unchanged by the shared walk — all from one `npm run test:all` on this tree |
+| **Suite** | 538 passing, 1 skipped, 14 files (`npm test`, after `npm run build`). Plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, 17 e2e passing with 1 skipped by design, and tarball acceptance, whose digest `1f284758e5ac3f6dbbb31a642252ca8c` is unchanged by the shared walk — all from one `npm run test:all` on this tree |
 | **Reproducing the suite** | Two preconditions, neither obvious from `npm test`: run **`npm run build` first** (several tests are dist-gated and silently skip without it), and have **`../langsys-php-sdk` checked out** (`shared-fixtures.test.ts` hard-fails without it, by design — see CONF-2 on absence versus agreement) |
 
 <!-- SUMMARY:START -->
@@ -23,10 +23,9 @@ By profile:
     6  server
 
 By status (binding rules only):
-   24  implemented
+   26  implemented
    14  provisional
-    6  partial
-    4  delegated
+    8  partial
     3  not implemented
     1  held (strip ruling)
     1  n/a (architecture: no report lane)
@@ -78,10 +77,15 @@ needed to say no.
    threw `SyntaxError: Unexpected end of JSON input` out of `send()`, so a registration the
    server accepted was logged as failed — and, with REG-8's backoff now built, would have
    opened a backoff window on a success. Fixed by branching on status before parsing.
-3. **CID-4 and ICU-1…5 were rowed on evidence that is not theirs.** CID-4 cited
-   derivation de-duplication; the rule is a content check before attaching to a legacy
-   match, and nothing performs one. ICU-1…3 and 5 cited tests in this repo that do not
-   exercise recovery; `interpolate` is the core's, and they are now rowed `delegated`.
+3. **CID-4 and ICU-1…5 were rowed on evidence that is not theirs — and grading ICU on
+   this package's own path found a live defect.** CID-4 cited derivation de-duplication; the
+   rule is a content check before attaching to a legacy match, and nothing performs one.
+   ICU-1…3 and 5 cited tests that do not exercise recovery, and `35000f7` then rowed them
+   `delegated`, which the canonical format reserves for bindings. Graded instead on tests
+   through `t()` — the path where two sibling server cores broke over a correct renderer —
+   they found that `t()` with **no params at all** returns raw ICU source on every path, while
+   an empty map works. The client core has the same short-circuit, executed, so the fix waits
+   for the core. See ICU-1.
 4. **A test that could not fail, found by mutation.** The option-duplicate pin compared the
    shared walk's tokens with `tokenizeHtml` — which now reads its tokens off that same walk,
    so dropping the duplicates moved both sides together and 0 went red. Re-pinned to a
@@ -159,11 +163,11 @@ carve-out is void and the decision must move fully per-request.
 | HINT-10 | n/a (profile: browser) | - | Profile `browser`. | browser |
 | HINT-11 | n/a (profile: browser) | - | Profile `browser`. | browser |
 | HINT-12 | n/a (profile: browser) | - | Profile `browser`. | browser |
-| ICU-1 | delegated | n/a (pure) | `interpolate` is the core's, imported from `/pure` and not reimplemented; the evidence is rowed in the core's conformance record, `interpolation-cross-impl` against all 19 rows of `langsys-php`'s `interpolation-reference.json`. No test in this repo exercises recovery — the previous revision cited one that does not. | all |
-| ICU-2 | delegated | n/a (pure) | As ICU-1: the core's `interpolate`, with null-as-absent asserted in the core's suite. No test here. | all |
-| ICU-3 | delegated | n/a (pure) | As ICU-1: recursive recovery and `#` rendering the argument name are asserted in the core's suite. No test here. | all |
+| ICU-1 | partial | n/a (pure) | Graded on this package's `t()`, not on the core's function: importing `interpolate` proves the function, not the call path into it (CONF-1). **Met with params, an empty map included:** `shared-fixtures` "langsys-php-sdk interpolation-reference.json, through this package's t()" renders all 19 rows (blob `d369bd18`) through `run()` + `t()` in each row's own locale — "select: argument missing falls to other" — and `translator` "ICU-1: an EMPTY params map renders its other branch"; PHP's empty-map short-circuit → 1 red (P1). **Not met with no params at all:** `t()` returns the raw ICU source in scope, with the category overload, on a catalog hit and out of scope, recorded by `translator` "ICU-1 GAP — with NO params, t() skips interpolation, matching the client core until both move". The client core does the same, executed at `langsys-js-typescript` `a18e4a3`, so fixing this side first would mismatch hydration on every such string: held core-first and reported to the TypeScript lane. The two-line fix turns exactly those five red (F1). | all |
+| ICU-2 | implemented | n/a (pure) | Through `t()`: `shared-fixtures` rows "select: null argument treated as missing", "plural: NULL is missing, not zero" and "simple: null value left verbatim", and `translator` "ICU-2: a null argument is absent on the t() path, not the string "null"". Mutation: coerce `null` to `''` before `interpolate` → 2 red (N1), the plural and plain rows. The select vectors stay green under it, because an empty string also selects `other` — recorded so the count is not read as covering them. | all |
+| ICU-3 | partial | n/a (pure) | **Met with params:** recursion into a satisfied branch and `#` rendering `{argName}` hold through `t()` — `shared-fixtures` rows "nested: missing arg inside satisfied branch" (`{n} amigos`), "nested: unsatisfied branch never evaluated" and "plural: argument missing keeps sentence, shows gap" (`{count} items`). No mutation on this package's path isolates recursion: it is the core function's behaviour, and this path only has to reach it. **Not met with no params:** the ICU-1 gap skips interpolation entirely, so `t()` on a plural returns its source instead of `{count} items` — `translator` "a plural with no params returns the source (fixed: {count} items)", red under the fix (F1). | all |
 | ICU-4 | partial | - | No test. `interpolate` is the core's, whose defaulted-argument notice is asserted in the core's suite behind the core's own logger. Missing: evidence that the notice fires, and names the argument, under this package's `debug` option. | all |
-| ICU-5 | delegated | n/a (pure) | As ICU-1: supplied arguments keep CLDR selection and the recovered literal survives formatting, asserted in the core's suite. `translator` "renders ICU plurals for a language with more than two forms" covers selection with every argument supplied, not recovery. | all |
+| ICU-5 | implemented | n/a (pure) | Through `t()`: `translator` "ICU-5: a supplied plural keeps CLDR selection beside a missing select (ru, n=3 is few)", with a distinct word per branch; `shared-fixtures` rows "russian plural: few", "russian plural: 21 is one", "russian plural: 111 is many" and "simple: integer formatted per locale"; and the recovered literal surviving a present-and-null argument, "plural: NULL is missing, not zero". Mutations: the request locale not passed to `interpolate` → 6 red (L1); `null` coerced to `''` → the null-literal row red (N1). | all |
 | CID-1 | implemented | n/a (pure) | `shared-fixtures` against `langsys-php-sdk`'s `custom-id-reference.json`, blob **`633a09d9`** (was `60dc9b33`), 13 rows, each asserting `canonical_json`, `serialized_hex` and `custom_id` separately; the blob hash is recomputed and pinned. Covers U+2028/U+2029, non-BMP U+1F600, Cyrillic and slash-bearing categories. Authored in another lane. | all |
 | CID-2 | implemented | n/a (pure) | `conformance/cid-2`: the `'__uncategorized__'` sentinel is coalesced at the boundary in `deriveBlockIdentity`, asserted on the whole derivation set rather than the primary id — `generateLegacyCustomId` deliberately does not coalesce, so the sentinel once emitted a fallback an empty category never did. | all |
 | CID-3 | implemented | n/a (pure) | `derivations` "the two historical LEGACY-token shapes", pinned to `HISTORICAL_TRANSLATABLE_ATTRIBUTES_15` so they reproduce what was actually stored. Registration always uses the primary derivation; the legacy ids are read-only, and `renderTranslateBlock` reads under them. | all |
@@ -200,9 +204,9 @@ carve-out is void and the decision must move fully per-request.
 | WIRE-3 | implemented | n/a (pure) | `api` "WIRE-3: sends lowercase xx-yy on the wire, whatever casing it was handed", and four spellings of one locale reach the wire identically. Resolved by construction on the `/pure` re-parent; `0.1.0` shipped the cased form. | all |
 | WIRE-4 | provisional | mock | **Clause 1:** `harvest` "WIRE-4 clause 1 — the translation call must never throw", checked in: a real connection refusal at `127.0.0.1:1`, `run()` + `t()` and `preloadCatalog()` both degrading, with a reachable-stub control. **Clause 2:** `harvest` "WIRE-4 clause 2 — a failed catalog fetch registers NOTHING", on the inline fetch and the preload path (`preloadCatalog()` → `run({ catalog })`, the shape `example/src/hooks.server.ts` uses), with positive controls that the same phrases do register when the catalog loads. Mutations A–H below, re-measured on this tree. Waits on: CONF-2 shared contract fixture. | all |
 | WIRE-5 | implemented | n/a (pure) | `apiUrl` is a constructor option, typed on `LangsysServerConfig` and listed in the README configuration table; `api` "URL construction" asserts the configured base is used, a trailing slash stripped, and the published host otherwise. The e2e suite points the built app at a separate mock API process and requests arrive there. The too-late failure mode is unrepresentable: there is no setter, so nothing can redirect after construction. | all |
-| CONF-1 | provisional | mock | Every `mock` row above asserts on a `fetch` stub, which CONF-1 forbids as sole evidence: GATE-1, GATE-2, GATE-5, GATE-6, GATE-8, REG-1, REG-8, REG-9, REG-10, SRV-1, SRV-3, OBS-1, WIRE-1, WIRE-2, WIRE-4. The every-path clause is met where it binds: TOK-1, TOK-3 and TOK-4 each name the paths they were proven on. Waits on: CONF-2 shared contract fixture. | all |
+| CONF-1 | provisional | mock | Every `mock` row above asserts on a `fetch` stub, which CONF-1 forbids as sole evidence: GATE-1, GATE-2, GATE-5, GATE-6, GATE-8, REG-1, REG-8, REG-9, REG-10, SRV-1, SRV-3, OBS-1, WIRE-1, WIRE-2, WIRE-4. The every-path clause: TOK-1, TOK-3 and TOK-4 name the paths they were proven on, and ICU-1…3 and 5 are graded on this package's `t()` rather than the core's function — which is how ICU-1's no-params gap surfaced. Waits on: CONF-2 shared contract fixture. | all |
 | CONF-2 | implemented | n/a (pure) | Every row carries a tier from the canonical set, and `_dev_/conformance-summary.mjs` refuses a status or tier outside the vocabulary, a collapsed, duplicated, missing or foreign id, and a header citing a blob other than the one its id list came from. Controls below. | all |
-| CONF-3 | implemented | n/a (pure) | Mutations are recorded below with the exact edit, the red count, and the suite each was measured on. Equivalent mutants are recorded as such (WIRE-4 B; `scriptingEnabled: false`), and survivors with what they exposed (M7; the first REG-6 test). | all |
+| CONF-3 | implemented | n/a (pure) | Mutations are recorded below with the exact edit, the red count, and the suite each was measured on. Equivalent mutants are recorded as such (WIRE-4 B; `scriptingEnabled: false`), and survivors with what they exposed (M7; the first REG-6 test). From the ICU battery on, mutations run in a git worktree rather than rewriting `src/` in place, which voided symlinked consumers' counts during the earlier runs. | all |
 
 ---
 
@@ -259,6 +263,20 @@ executed against the shared walk over 21 inputs × 4 option sets — 84 comparis
 |---|---|---|
 | L1 | `example/src/routes/+layout.server.ts` — delete `langsysCatalog: locals.langsysCatalog,`, rebuild the example | 2 |
 
+### ICU through `t()` (`tests/translator.test.ts` + `tests/conformance/shared-fixtures.test.ts`, 111 tests; git worktree)
+
+The first battery run in an isolated copy rather than in place. P1, N1, L1 and O1 were measured
+while the five no-params tests still asserted the fixed behaviour, so each count is the red
+beyond those five. F1 was measured after they became gap tests, on the worktree's full suite.
+
+| # | Edit | Red |
+|---|---|---|
+| P1 | `src/translator.ts` — `if (!params) return translated;` → also return early on an empty map (PHP's measured shape) | 1 |
+| N1 | `return interpolate(translated, params, scope.locale)` — coerce `null` values to `''` first | 2 |
+| L1 | the same call — pass `undefined` instead of `scope.locale` | 6 |
+| O1 | out of scope — `params ? interpolate(phrase, params, undefined) : phrase` → `phrase` | 1 |
+| F1 | the fix itself, `params ?? {}` on both returns (539 tests) | 5 — exactly the ICU-1 gap tests, nothing else |
+
 ### WIRE-4 clause 2 (full unit suite, 501 passing / 1 skipped at measurement)
 
 Re-measured on this tree. The previous record cited line numbers the file had moved away
@@ -310,17 +328,19 @@ rather than refused.
 2. **GATE-2 hold-on-unknown and REG-8 retention — one decision.** Both need a queue that
    outlives the request, which bends this package's one invariant. Held together for the
    operator's ruling on per-request server SDKs.
-3. **CID-4 — a legacy match is attached on id presence alone.** A collision attaches the
+3. **ICU-1 and ICU-3 — `t()` with no params renders raw ICU source.** A page calling `t()` on
+   a `select` or `plural` without params shows the syntax. The client core does the same, so
+   this side waits for the core's fix and flips in the same wave; five gap tests go red when it
+   does. No lane's shared interpolation fixture has a no-params row, which is why none caught it.
+4. **CID-4 — a legacy match is attached on id presence alone.** A collision attaches the
    wrong block's text, and the failure looks like a translation. A behaviour change, so not
    built this round.
-4. **SRV-5 — the fail-loud half.** `UncapturableChildError` exists and nothing throws it;
+5. **SRV-5 — the fail-loud half.** `UncapturableChildError` exists and nothing throws it;
    the framework adapters are not built.
-5. **REG-11 — no ellipsis warning.** Held.
-6. **TOK-2 — the C0 control characters.** Held for the strip ruling.
-7. **GATE-3, ICU-4 and REG-12 have no test pointing at them.** Each is defensible by reading
+6. **REG-11 — no ellipsis warning.** Held.
+7. **TOK-2 — the C0 control characters.** Held for the strip ruling.
+8. **GATE-3, ICU-4 and REG-12 have no test pointing at them.** Each is defensible by reading
    the code, which is exactly the row CONF-1 says to distrust.
-8. **ICU-1…3 and 5 rest on the core's record.** Delegated, with no test here; if the core's
-   `interpolate` regresses, nothing in this repo goes red.
 9. **CONF-1 is unmet fleet-wide.** The shared contract fixture does not exist, which caps
    every transport row at `provisional`.
 

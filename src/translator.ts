@@ -51,6 +51,31 @@ const CONSOLE_LOGGER: Logger = {
     warnOnce: (_key: string, message: string) => console.warn('[langsys-js-server]', message),
 };
 
+const ELLIPSIS = /(?:\u2026|\.\.\.)\s*$/;
+
+/**
+ * REG-11: a phrase ending in an ellipsis is usually upstream truncation, and registering it
+ * translates the stub and later the full text as a second phrase. It is suppressed only on a
+ * second signal — a longer entry in the same category already sharing its prefix — and otherwise
+ * registers, because `Loading…` and `Saving…` are real phrases and refusing them would be a new
+ * silent failure. Either way it is noted at debug level.
+ */
+function suppressedTruncation(logger: Logger, bucket: Record<string, unknown> | undefined, phrase: string): boolean {
+    if (!ELLIPSIS.test(phrase)) return false;
+    const prefix = phrase.replace(ELLIPSIS, '').trimEnd();
+    const longer = prefix
+        ? Object.keys(bucket ?? {}).find((key) => key !== phrase && key.length > prefix.length && key.startsWith(prefix))
+        : undefined;
+    logger.log(
+        longer
+            ? `Not registering "${phrase}": it ends in an ellipsis and "${longer}" is already in the catalog, so it is ` +
+                  'a truncation of it.'
+            : `"${phrase}" ends in an ellipsis. If it is upstream truncation, register the full text instead; ` +
+                  'registering it as written.',
+    );
+    return longer !== undefined;
+}
+
 export const t: TFunction = (
     phrase: string,
     second?: string | TranslateParams,
@@ -105,7 +130,7 @@ export const t: TFunction = (
         // A miss in the BASE locale is not a miss — the phrase is already in the base
         // language and there is nothing to look up. Queueing those would register every
         // phrase on every base-locale render.
-        queueMiss(scope, phrase, category);
+        if (!suppressedTruncation(scope.logger, bucket, phrase)) queueMiss(scope, phrase, category);
     }
 
     // ICU-1: a phrase carrying ICU renders its `other` branch with no params, never its raw

@@ -38,6 +38,12 @@ export interface RenderedBlock {
     missing: MissingPhrase[];
     /** True when the catalog knew this block at all. */
     known: boolean;
+    /**
+     * The attribute the host element carries (MARK-1): `data-ls-contentblock` with the id this
+     * render resolved under — the primary id, or the historical one a fallback resolved to.
+     * This package renders a host's inner HTML, not the host; the caller spreads these onto it.
+     */
+    hostAttributes: Record<string, string>;
 }
 
 /**
@@ -99,6 +105,13 @@ function renderSlots(
     }
 }
 
+/** The same phrases, as sets (CID-4). */
+function sameContent(stored: readonly string[], tokens: readonly string[]): boolean {
+    const a = new Set(stored);
+    const b = new Set(tokens);
+    return a.size === b.size && [...a].every((phrase) => b.has(phrase));
+}
+
 /**
  * Resolve one `<Translate>` block against the current request's catalog.
  *
@@ -121,9 +134,9 @@ export function renderTranslateBlock(innerHtml: string, category = ''): Rendered
         // Same posture as `t()`: never throw for a missing scope, because the correct
         // degraded output is the source content and a 500 is strictly worse. ICU still
         // renders, as it does from `t()` out of scope.
-        if (!carriesIcu) return { html: innerHtml, customId: identity.primary.id, missing, known: false };
+        if (!carriesIcu) return { html: innerHtml, customId: identity.primary.id, missing, known: false, hostAttributes: stampContentBlock(identity.primary.id) };
         renderSlots(slots, undefined, undefined);
-        return { html: serialize(fragment), customId: identity.primary.id, missing, known: false };
+        return { html: serialize(fragment), customId: identity.primary.id, missing, known: false, hostAttributes: stampContentBlock(identity.primary.id) };
     }
 
     const bucket = scope.catalog[category || UNCATEGORIZED];
@@ -141,12 +154,18 @@ export function renderTranslateBlock(innerHtml: string, category = ''): Rendered
     // shape still resolves. Registration always uses the primary.
     let block = lookup(identity.primary.id);
     let known = block !== undefined || (bucket !== undefined && Object.prototype.hasOwnProperty.call(bucket, identity.primary.id));
+    let resolvedId = identity.primary.id;
     if (block === undefined) {
         for (const fallback of identity.fallbacks) {
             const found = lookup(fallback.id);
-            if (found) {
+            // CID-4: a historical id is attached only when the stored block holds this block's
+            // phrases. None of the historical id spaces is injective, so a collision would
+            // otherwise render a foreign block's text and never register this one. Compared as a
+            // set: the catalog keys a block by phrase, so its order is already gone.
+            if (found && sameContent(Object.keys(found), tokens)) {
                 block = found;
                 known = true;
+                resolvedId = fallback.id;
                 break;
             }
         }
@@ -196,16 +215,16 @@ export function renderTranslateBlock(innerHtml: string, category = ''): Rendered
     if (!entries) {
         // A miss, or the base locale. Rendered only when there is ICU to render (ICU-1); the
         // client core skips this pass for the same units.
-        if (!carriesIcu) return { html: innerHtml, customId: identity.primary.id, missing, known };
+        if (!carriesIcu) return { html: innerHtml, customId: identity.primary.id, missing, known, hostAttributes: stampContentBlock(resolvedId) };
         renderSlots(slots, undefined, scope.locale);
-        return { html: serialize(fragment), customId: identity.primary.id, missing, known };
+        return { html: serialize(fragment), customId: identity.primary.id, missing, known, hostAttributes: stampContentBlock(resolvedId) };
     }
 
     // Each slot writes back to exactly where its token came from. Excluded, phrase-marked,
     // code and nested content-block subtrees yield no slot, so they are left intact.
     renderSlots(slots, entries, scope.locale);
 
-    return { html: serialize(fragment), customId: identity.primary.id, missing, known };
+    return { html: serialize(fragment), customId: identity.primary.id, missing, known, hostAttributes: stampContentBlock(resolvedId) };
 }
 
 /**

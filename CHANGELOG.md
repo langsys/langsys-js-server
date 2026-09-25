@@ -72,11 +72,22 @@ whose markup carries none of the listed constructs keep the ids they had.
   default envelope; `checkTemplate()` refuses label markers and framework placeholders; and
   `langsys.registerTemplates()` with its `langsys-messages` command lists, checks and registers every
   declared template, exiting non-zero on a problem. New option `messageCategory` (default `Errors`).
+- **`hostAttributes` on every rendered block** (MARK-1). `renderTranslateBlock()` returns the
+  `data-ls-contentblock` attribute carrying the id the block resolved under, for the adapter to
+  spread onto the host element.
 - **Catalog snapshots** (SNAP-1). `langsys.exportSnapshot(locale, categories?)` and the
   `langsys-snapshot` command filter `GET /translations/data` by category into a file a client loads
   as its preloaded catalog.
 
 ### Changed
+
+- **A phrase ending in an ellipsis is noted, and suppressed only when its full form is
+  catalogued** (REG-11). `t()` does not register `Our water is filtered through seven…` when the
+  catalog already holds a longer entry in the same category sharing that prefix; `Loading…` and
+  other ellipsis phrases still register. Either case is noted at debug level.
+- **A historical block id is attached only when its content matches** (CID-4). A block resolved
+  under an older id renders from it only when the stored block holds the same phrases; otherwise
+  it stays unknown and registers under its own id.
 
 Everything here can move a `custom_id`:
 

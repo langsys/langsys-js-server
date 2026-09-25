@@ -4,13 +4,13 @@
 |---|---|
 | **SDK** | `langsys-js-server` (server-side JS, the Node sibling to `langsys-php`) |
 | **Profiles** | all, server |
-| **specVersion** | 8.2.14 (unpublished) |
-| **Spec revision read** | langsys2 9b23f3d8…, docs/sdk-spec.mdx blob 33bbc4095ef2d13a55926b71045a7094f6b9706a (specVersion 8.2.14, 113 rule ids). Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree 9b23f3d8 docs/sdk-spec.mdx` at this write. The ids are pinned to this blob in `_dev_/conformance-summary.mjs`, which exits 2 if this line cites a different one |
+| **specVersion** | 8.2.15 (unpublished) |
+| **Spec revision read** | langsys2 f5568b88…, docs/sdk-spec.mdx blob b9fd4b5b1c15f7ba29656d550dca1f06013327c0 (specVersion 8.2.15, 113 rule ids). Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree f5568b88 docs/sdk-spec.mdx` at this write. The ids are pinned to this blob in `_dev_/conformance-summary.mjs`, which exits 2 if this line cites a different one |
 | **SDK revision** | `feature/838_write_key_gating` at this commit |
-| **Core** | `langsys-js-typescript/pure` at **`be6ccd72`**, resolved through a `node_modules` symlink to the sibling checkout, whose `dist` is byte-identical to a clean build of a `git archive` of that commit. Mutation batteries run against that clean build |
+| **Core** | `langsys-js-typescript/pure` at **`2d57cdd9`**, resolved through a `node_modules` symlink to the sibling checkout. The suite and the mutation batteries are measured against a clean build of a `git archive` of that commit, because the sibling working tree carries uncommitted edits |
 | **Contract double** | `contract-fixture/`, vendored byte-exact from `langsys-js-typescript` `be6ccd72`, tree `542f57f5ffcb9038db1b7411152b7e31b96cb269`, recomputed by `tests/contract-fixture.test.ts` |
-| **Shared fixtures** | canonicalization-reference.json `9027a603` (32 rows); interpolation-reference.json `017bffdd` (25 rows); server-message-vectors.json `c8125549`; custom-id-reference.json `633a09d9` (13 rows). Each is asserted by blob |
-| **Suite** | 703 passing, 1 skipped, 25 files, plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, and tarball acceptance with digest `1f284758e5ac3f6dbbb31a642252ca8c` — measured in a git worktree whose core is a clean build of committed `be6ccd72`. The 20 e2e tests (1 skipped by design) ran in the main tree, whose core symlink points at the sibling working tree. That tree currently carries uncommitted edits, among them its canonicalization fixture re-headed to this spec, so `shared-fixtures`' pins read red there until that lane commits and this one re-pins |
+| **Shared fixtures** | canonicalization-reference.json `cae284df` (32 rows); mig-vectors.json `822dcc82` (70 rows); interpolation-reference.json `017bffdd` (25 rows); server-message-vectors.json `c8125549`; custom-id-reference.json `633a09d9` (13 rows). Each is asserted by blob |
+| **Suite** | 766 passing, 1 skipped, 26 files, plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, and tarball acceptance with digest `1f284758e5ac3f6dbbb31a642252ca8c` — measured in a git worktree whose core is a clean build of committed `2d57cdd9`. The 20 e2e tests (1 skipped by design) ran in the main tree, whose core symlink points at the sibling working tree; that tree carries uncommitted edits, among them `mig-vectors.json`, so the blob pins read red there until that lane commits |
 | **Reproducing the suite** | Run **`npm run build` first** (the exit-drain, command and build-output tests drive `dist/`, and a named test fails if it is missing), and have **`../langsys-php-sdk` checked out** (`shared-fixtures.test.ts` reads two fixtures from it) |
 
 <!-- SUMMARY:START -->
@@ -29,16 +29,16 @@ By profile (first clause):
     1  server, binding
 
 By status (binding rules only):
-   68  implemented
-    9  not implemented
+   76  implemented
     3  n/a (architecture: a framework-agnostic core has no validator, label or redirect)
     2  partial
     1  n/a (architecture: no report lane)
+    1  not implemented
 
 By tier, binding rules only (CONF-2):
-   52  n/a (pure)
+   60  n/a (pure)
    17  contract
-   14  -
+    6  -
 ```
 <!-- SUMMARY:END -->
 
@@ -81,8 +81,8 @@ discovered never translated. Failed and skipped registrations are retained per r
 retried (REG-8), held on an unknown decision (GATE-2), and drained on exit (REG-3). A failed
 catalog fetch is remembered (CACHE-2). New surface: `resolveLocale()`, `resolvedRootAttributes()`,
 `message()`, `errorBody()`, `registerTemplates()`, `exportSnapshot()` and `verifySnapshot()` over the fleet's one snapshot format, the
-`langsys-messages` and `langsys-snapshot` commands, and `hostAttributes` on every rendered block. The MIG family waits on
-the core, which will ship the legacy-key converter in `/pure`.
+`langsys-messages` and `langsys-snapshot` commands, and `hostAttributes` on every rendered block. The legacy-key mode (MIG) runs
+on the core's `/pure` resolver and converter.
 
 ---
 
@@ -170,14 +170,14 @@ the core, which will ship the legacy-key converter in `/pure`.
 | MSG-10 | n/a (architecture: a framework-agnostic core has no validator, label or redirect) | - | The label source lives in the Express/Hono/NestJS binding, built on this core's `message()`, `errorBody()` and `checkTemplate()`. | server |
 | MSG-11 | implemented | n/a (pure) | Both checks the rule names. Check 1 at declaration: `checkTemplate()` refuses `{attribute}`, `{field}`, `{label}`, `{other}`, `{values}`, `:attribute` and `{{field}}`. Check 2 at fill: `message()` warns once per template and marker when a marker is filled with a catalogued phrase, and stays silent otherwise (`msg` "MSG-11 check 2 …"). The proper-noun case is the rule's residue. Mutations: warning every time 1 red, never 1. | server |
 | MSG-12 | n/a (architecture: a framework-agnostic core has no validator, label or redirect) | - | The redirect hand-off lives in the Express/Hono/NestJS binding, built on this core's `message()`, `errorBody()` and `checkTemplate()`. | server, binding |
-| MIG-1 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
-| MIG-2 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
-| MIG-3 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
-| MIG-4 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
-| MIG-5 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
-| MIG-6 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
-| MIG-7 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
-| MIG-8 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
+| MIG-1 | implemented | n/a (pure) | Off by default: with no `legacyKeys` the resolver is never built and `t()` does no key lookup — `mig` "with nothing configured, a key-shaped argument is literal source text", asserted with nothing having configured the mode, and its control with the mode on. Mutation G1 (mode never consulted) → 21 red. | browser, server |
+| MIG-2 | implemented | n/a (pure) | In the mode `t()` resolves its argument as a key first through the core's `createLegacyKeys` (from `/pure`): a hit registers the converted value, a miss the argument. A literal miss converts under the entry point that received it — `t()` nothing, `langsys.bridge('i18next')` or `langsys.bridge('vue-i18n')` its own syntax — through the core's `convertLegacyCall`. `mig-vectors.json` (blob `822dcc82`) `calls` rows for `t`, `i18next` and `vue-i18n`, and the `same_phrase_as` tie of `Hello {{name}}` to `t('Hello {name}')`; rows for other ecosystems' entry points are `n/a (format)`. Mutations: a bridge converts nothing 3 red, `t()` converting a miss 1. | browser, server |
+| MIG-3 | implemented | n/a (pure) | A hit registers the resolved value, never the key: every `resolution` row asserts the registered phrase and that the key string is not registered. | browser, server |
+| MIG-4 | implemented | n/a (pure) | The conversion is the core's; this row grades that `t()` registers its result. Every `value_conversion` row in this core's formats (23) resolved through `t()` from a file holding the value, and the `i18next` `plural_forms` rows as suffix-paired keys; an unrecognised value registers as written and warns once per file and key at every level. Other formats' rows are `n/a (format)`. Mutation: unrecognised value not warned 1 red. | browser, server |
+| MIG-5 | implemented | n/a (pure) | The key's namespace is the category unless the call passes one: the `resolution` rows `flat-dotted-key-names-its-category` and `explicit-category-wins`, among others. Mutation G2 (namespace wins over the call) → 1 red. | browser, server |
+| MIG-6 | implemented | n/a (pure) | `mig` "MIG-6 …": a key absent from the files registers its argument and is noted at debug; a changed value is a new phrase. Mutation: miss not noted 1 red. | browser, server |
+| MIG-7 | implemented | n/a (pure) | `legacyKeys` is built at construction, so a file in a format outside `i18next`, `vue-i18n` and `plain` — or named `.php`, `.yml`, `.po`, `.mo` — is refused at load with the core's `LegacyFormatError`, naming the format and the file (a `.mo` names its `.po`): every `refusals` row. Nested paths, file order and duplicates are the `resolution` rows; `langsys.legacyKeyReport()` lists duplicates and problems. `readLegacyKeyFiles()` reads JSON files from disk for a server. Mutation G7 (built lazily) → 28 red. | browser, server |
+| MIG-8 | implemented | n/a (pure) | This profile's entry point is `t()` in migrate mode, beside the i18next and vue-i18n bridges over the same resolver. Per ecosystem, as the rule's test reads at this revision: `mig` "t() and a bridge over one resolver register the same phrase, id and category" — a `vue-i18n` plural key through `t()` and through the vue-i18n bridge render the same text and register one phrase under the key's namespace. Across ecosystems, the `same_phrase_as` rows. | browser, server |
 | MIG-9 | not implemented | - | Held until the 907 merge lands the `translations` map on `POST /translatable-items`. | server |
 | SNAP-1 | implemented | contract | One format, `langsys-catalog-snapshot` v1. `langsys.exportSnapshot(locales, categories?)` and the `langsys-snapshot` command read each locale's `GET /translations` and filter it by category, with no export endpoint; the document carries `project_id`, `generated_at` (UTC, seconds), `base_locale`, sorted `locales` and `categories`, `catalog` (locale → category → flat entries, a category the locale lacks absent) and a `sha256:` checksum over the canonical serialisation, which is built by hand: members in code point order, CID-1 escaping, no whitespace, `{}` for an empty map. `snap`: the canonical bytes and checksum equal an oracle computed by a different implementation (Python's `json.dumps(sort_keys=True, ensure_ascii=False, separators=(',', ':'))`) over the spec's cases — an empty category, an integer-like key, U+1F600 beside U+E000, U+2028, C0 controls, a block map with a null, a category held in one locale and not another; against the double, the exported catalog equals the API's `/translations` for the chosen categories and loads; the command's file loads. `snapshot-vectors.json` is not authored yet; it is vendored by blob when it is. Mutations: default `sort()` 3 red, object key order 3, uppercase `\u` hex 3, U+2028 escaped 3, checksum over `format`/`version` 3, missing member unchecked 1, checksum not compared 1, short escapes dropped 3. | server |
 | SNAP-2 | n/a (profile: browser, binding) | - | Profile `browser, binding`. | browser, binding |
@@ -407,16 +407,15 @@ smallest one that should trip exactly one check.
 | a `FOO-1` row added | — | 2 | Rows for ids NOT in the pinned spec: FOO-1 |
 | MIG-9's status → `waiting` | — | 2 | Status or tier outside the canonical vocabulary: |
 | CID-1's tier → `n/a (contract fixture)` | — | 2 | Status or tier outside the canonical vocabulary: |
-| the header's blob → `abe122cf…` (8.2.13) | — | 2 | The "Spec revision read" header does not cite blob 33bbc409…, which is the revision this script's id list was extracted from. |
+| the header's blob → `33bbc409…` (8.2.14) | — | 2 | The "Spec revision read" header does not cite blob b9fd4b5b…, which is the revision this script's id list was extracted from. |
 | ICU-4's status → `not implemented`, summary left as it was | `--check` | 1 | CONFORMANCE.md summary is STALE. Recompute: |
 
 ## Gaps, ranked by cost
 
-1. **MIG-1…8 — legacy-key migration.** Waits on the core's `/pure` resolver and converter and on
-   `mig-vectors.json`; building a converter here would be a second source of truth for the
-   registered phrase. MIG-9 waits on the 907 merge.
-2. **SRV-5 — the fail-loud half.** `UncapturableChildError` exists and nothing throws it; the
+1. **SRV-5 — the fail-loud half.** `UncapturableChildError` exists and nothing throws it; the
    framework adapters that capture children are not built.
+2. **MIG-9 — the one-time import.** Held until the 907 merge lands the `translations` map on
+   `POST /translatable-items`.
 3. **ICU-4 — no test** that the core's defaulted-argument notice fires, and names the argument,
    under this package's `debug` option.
 

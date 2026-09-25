@@ -49,6 +49,11 @@ export interface RequestScope {
      * (REG-8, GATE-2); never merged into another request's.
      */
     retryItems: TranslatableItem[];
+    /**
+     * The server object's legacy-key resolver when the mode is on (MIG), shared by every request
+     * to it and never request-varying; `undefined` when off.
+     */
+    legacyKeys?: import('langsys-js-typescript/pure').LegacyKeys;
     projectId: string | number;
     baseLocale: string;
     logger: Logger;

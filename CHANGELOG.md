@@ -75,6 +75,11 @@ whose markup carries none of the listed constructs keep the ids they had.
 - **`hostAttributes` on every rendered block** (MARK-1). `renderTranslateBlock()` returns the
   `data-ls-contentblock` attribute carrying the id the block resolved under, for the adapter to
   spread onto the host element.
+- **Legacy-key migration mode** (MIG-1–MIG-8). With `legacyKeys`, `t()` resolves its argument as a
+  key in the app's kept source file first and registers the converted source value under the key's
+  namespace, through the core's resolver and converter. `langsys.bridge('i18next' | 'vue-i18n')`
+  converts literal misses from those libraries' syntax; `readLegacyKeyFiles()` reads the files from
+  disk. Off by default.
 - **Catalog snapshots** (SNAP-1, SNAP-3). `langsys.exportSnapshot(locales, categories?)` and the
   `langsys-snapshot` command write the fleet's one format, `langsys-catalog-snapshot` v1: each
   locale's `GET /translations` filtered by category, with a SHA-256 checksum over a canonical

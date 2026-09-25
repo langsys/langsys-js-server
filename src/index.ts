@@ -16,7 +16,7 @@ import { getScope, runInScope, type RequestScope } from './context.js';
 import { SNAPSHOT_FORMAT, SNAPSHOT_VERSION, byCodePoint, snapshotChecksum, type CatalogSnapshot } from './snapshot.js';
 import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue, queueMiss, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
-import { RESOLVED_MARKER_ATTR, canonicalizeLocale } from 'langsys-js-typescript/pure';
+import { RESOLVED_MARKER_ATTR, canonicalizeLocale, createLegacyKeys, type LegacyEntryPoint, type LegacyKeys } from 'langsys-js-typescript/pure';
 import { resolveRequestLocale, type ResolveLocaleOptions, type ResolvedLocale } from './locale.js';
 import { buildMessage, checkTemplate, DEFAULT_SERVER_MESSAGE_CATEGORY, type MessageInput, type ServerMessage } from './messages.js';
 import type {
@@ -28,6 +28,9 @@ import type {
 } from './types.js';
 
 export { t, type TFunction } from './translator.js';
+import { translateVia, type TFunction as TranslatorFunction } from './translator.js';
+export { readLegacyKeyFiles } from './legacy.js';
+export { LegacyFormatError, SUPPORTED_LEGACY_FORMATS, type LegacyKeyFile } from 'langsys-js-typescript/pure';
 export { tokenizeHtml, isPhraseMarked, isTranslationExcluded, type TokenizeOptions } from './tokenizer.js';
 export { deriveBlockIdentity, type BlockIdentity, type Derivation } from './derivations.js';
 export {
@@ -226,6 +229,8 @@ export class LangsysServer {
      * re-register the same sentence on every request. The same for every request; bounded.
      */
     private readonly queuedTemplates = new Set<string>();
+    /** The legacy-key resolver (MIG), or undefined when the mode is off; the same for every request. */
+    private readonly legacyKeys: LegacyKeys | undefined;
 
     constructor(config: LangsysServerConfig) {
         if (!config.projectId) throw new Error('createLangsysServer: `projectId` is required');
@@ -237,6 +242,9 @@ export class LangsysServer {
         this.harvestEnabled = config.harvest ?? true;
         this.flushOnExit = config.flushOnExit ?? true;
         this.messageCategory = config.messageCategory ?? DEFAULT_SERVER_MESSAGE_CATEGORY;
+        // MIG-1/MIG-7: built only when configured, and a file in a format this core does not read
+        // is refused here, at load, naming the format and the file — before anything resolves.
+        this.legacyKeys = config.legacyKeys?.length ? createLegacyKeys(config.legacyKeys) : undefined;
         this.logger = createLogger(config.debug ?? false);
         this.api = new LangsysApi(
             config.projectId,
@@ -417,6 +425,7 @@ export class LangsysServer {
             blockSeen: new Set(),
             blocksPosted: 0,
             retryItems: [],
+            ...(this.legacyKeys ? { legacyKeys: this.legacyKeys } : {}),
             projectId: this.projectId,
             baseLocale: this.baseLocale,
             logger: this.logger,
@@ -611,6 +620,21 @@ export class LangsysServer {
             catalog,
         };
         return { format: SNAPSHOT_FORMAT, version: SNAPSHOT_VERSION, ...doc, checksum: await snapshotChecksum(doc) };
+    }
+
+/**
+     * A `t()` for a bridged i18n entry point — `i18next` or `vue-i18n` — for an app whose call sites
+     * still use that library's syntax. In the legacy-key mode, a literal miss converts under that
+     * syntax, so `Hello {{name}}` through the i18next bridge and `Hello {name}` through `t()` register
+     * one phrase (MIG-2). Otherwise it is `t()`.
+     */
+    bridge(entryPoint: Exclude<LegacyEntryPoint, 't'>): TranslatorFunction {
+        return translateVia(entryPoint);
+    }
+
+    /** Keys defined in more than one legacy file, and files that could not be read as configured (MIG-7). */
+    legacyKeyReport(): { duplicates: ReturnType<LegacyKeys['duplicates']>; problems: ReturnType<LegacyKeys['problems']> } {
+        return { duplicates: this.legacyKeys?.duplicates() ?? {}, problems: this.legacyKeys?.problems() ?? [] };
     }
 
     flush(result: RenderResult<unknown>): Promise<void> {

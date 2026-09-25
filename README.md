@@ -343,6 +343,26 @@ free.
 
 Reading is live now: `tokenizeHtml` skips subtrees carrying either spelling.
 
+## Migrating from i18n keys
+
+A keyed codebase can move to Langsys without a codemod. Keep only the source-language file,
+delete the others, and name it:
+
+```ts
+const langsys = createLangsysServer({
+    // …
+    legacyKeys: readLegacyKeyFiles([{ path: 'locales/en.json', format: 'i18next' }]),
+});
+```
+
+`t('checkout.submit')` now registers and translates the file's value, `Pay now`, under the category
+`checkout`, while `t('Pay now')` written the Langsys way keeps working beside it. The catalog only
+ever holds source text, so a later codemod can inline the English and delete the file without any
+phrase changing. A key missing from the file registers as literal text and is noted at debug; a
+value the conversion cannot read registers as written, with a warning naming the file and key.
+Files in formats this package does not read are refused at startup. Leave `legacyKeys` unset once
+the migration is done, and `t()` does no key lookup at all.
+
 ## Server messages
 
 Validation errors and system messages never appear on a page a visitor or the discovery renderer
@@ -458,6 +478,7 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `harvest` | `boolean` | `true` | Disable phrase registration outright, regardless of key type |
 | `flushOnExit` | `boolean` | `true` | Best-effort send of held phrases when the process exits (`beforeExit`, SIGTERM, SIGINT). Not a guarantee: call `flush(result)` where losing a phrase matters |
 | `messageCategory` | `string` | `'Errors'` | The category server message templates are registered and looked up under. Clients rendering the messages must use the same one |
+| `legacyKeys` | `LegacyKeyFile[]` | — | Turn on the legacy-key migration mode: your kept source-language files (`i18next`, `vue-i18n` or `plain` JSON). `t()` then resolves its argument as a key first. See "Migrating from i18n keys" |
 | `fetch` | `typeof fetch` | global | Inject a fetch implementation (tests, proxies, edge runtimes) |
 
 ### Exports
@@ -476,6 +497,8 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `langsys.registerTemplates(templates, { register? })` | Check every declared template and, with `register`, register the ones the catalog does not list. Returns `{ templates, problems, registered }`. Also available as the `langsys-messages` command. |
 | `langsys.exportSnapshot(locales, categories?)` | A `langsys-catalog-snapshot` v1 document: each locale's catalog filtered by category, checksummed, in the format every Langsys SDK loads. Throws on a failed fetch. Also available as the `langsys-snapshot` command. |
 | `verifySnapshot(document)` | Load a snapshot: resolves to it, or rejects naming why — an edited file (checksum), a different format, an unsupported version, a missing member. |
+| `langsys.bridge('i18next')`, `langsys.bridge('vue-i18n')` | A `t()` whose literal misses convert from that library's syntax, for call sites that still use it. |
+| `readLegacyKeyFiles([{ path, format?, namespace? }])` | Read the legacy-key mode's JSON files from disk (Node, Deno, Bun). |
 | `checkTemplate(template)` | Why a template may not be declared — a label marker such as `{field}`, or a framework placeholder such as `:attribute` — or `null`. |
 | `fillTemplate`, `templateMarkers`, `resolveServerMessages` | The shared marker grammar, filling, and finding entries in a response body. |
 | `langsys.invalidate(locale)` | Drop a locale's cached catalog across every worker sharing the cache. |

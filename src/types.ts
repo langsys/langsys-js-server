@@ -57,6 +57,14 @@ export interface LangsysServerConfig {
      * the same on every client that renders them. Default `Errors`.
      */
     messageCategory?: string;
+    /**
+     * Turn on the legacy-key mode (MIG): the app's kept source-language files, each
+     * `{ name, format?, namespace?, data }` with `data` the parsed JSON (`readLegacyKeyFiles()`
+     * reads them from disk). `t()` then resolves its argument as a key first. Formats this package
+     * reads: `i18next`, `vue-i18n`, `plain` (default); any other is refused at construction. Off
+     * when absent, and then `t()` does no key lookup at all.
+     */
+    legacyKeys?: import('langsys-js-typescript/pure').LegacyKeyFile[];
     fetch?: typeof globalThis.fetch;
 }
 

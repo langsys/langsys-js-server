@@ -12,10 +12,10 @@
  * interim helper is: delete the local `ct`/`makeCatalogT`, import this instead.
  */
 
-import { getScope, NO_SCOPE_MESSAGE } from './context.js';
+import { getScope, NO_SCOPE_MESSAGE, type RequestScope } from './context.js';
 import { queueMiss } from './harvest.js';
 import { UNCATEGORIZED } from './constants.js';
-import { findUnusedParamKeys, interpolate } from 'langsys-js-typescript/pure';
+import { convertLegacyCall, findUnusedParamKeys, interpolate, type LegacyEntryPoint } from 'langsys-js-typescript/pure';
 import { warnOnceGlobal, type Logger } from './logger.js';
 import type { TranslateParams } from './types.js';
 
@@ -76,12 +76,52 @@ function suppressedTruncation(logger: Logger, bucket: Record<string, unknown> | 
     return longer !== undefined;
 }
 
-export const t: TFunction = (
+/**
+ * The legacy-key mode (MIG). A key hit is the key's converted value, under the call's category or
+ * else the key's namespace (MIG-3, MIG-5). A miss is the argument as literal source text, converted
+ * under the syntax of the entry point that received it — Langsys `t()` converts nothing, an i18next
+ * or vue-i18n bridge converts its own syntax (MIG-2) — and is noted at debug (MIG-6). A value the
+ * conversion does not recognise registers as written and warns at every level, once per file and
+ * key (MIG-4). The resolver and conversion are the core's, so this registers what the client core
+ * registers for the same call.
+ */
+function resolveLegacy(
+    scope: RequestScope,
+    arg: string,
+    category: string,
+    entryPoint: LegacyEntryPoint,
+): { phrase: string; category: string } {
+    const hit = scope.legacyKeys!.resolve(arg);
+    if (!hit) {
+        const converted = entryPoint === 't' ? arg : convertLegacyCall(arg, entryPoint).text;
+        scope.logger.log(`"${arg}" is not a key in the legacy source files, so it registers as literal source text.`);
+        return { phrase: converted, category };
+    }
+    if (!hit.recognised) {
+        scope.logger.warnOnce(
+            `legacy-value:${hit.file}:${hit.key}`,
+            `The legacy key "${hit.key}" in ${hit.file} ${hit.issue}, so its value registers exactly as written.`,
+        );
+    }
+    return { phrase: hit.phrase, category: category || hit.category || '' };
+}
+
+export const t: TFunction = (phrase: string, second?: string | TranslateParams, third?: TranslateParams): string =>
+    translate(phrase, second, third, 't');
+
+/** `t()` for a bridged i18n entry point: a literal miss converts under that entry point's syntax (MIG-2). */
+export function translateVia(entryPoint: LegacyEntryPoint): TFunction {
+    return ((phrase: string, second?: string | TranslateParams, third?: TranslateParams) =>
+        translate(phrase, second, third, entryPoint)) as TFunction;
+}
+
+function translate(
     phrase: string,
-    second?: string | TranslateParams,
-    third?: TranslateParams,
-): string => {
-    const category = typeof second === 'string' ? second : '';
+    second: string | TranslateParams | undefined,
+    third: TranslateParams | undefined,
+    entryPoint: LegacyEntryPoint,
+): string {
+    let category = typeof second === 'string' ? second : '';
     const params = (typeof second === 'object' && second !== null ? second : third) as
         | TranslateParams
         | undefined;
@@ -100,6 +140,8 @@ export const t: TFunction = (
         // core's `interpolate` throws on. See the in-scope return below.
         return interpolate(phrase, params ?? {}, undefined);
     }
+
+    if (scope.legacyKeys) ({ phrase, category } = resolveLegacy(scope, phrase, category, entryPoint));
 
     const bucket = scope.catalog[category || UNCATEGORIZED];
     const value = bucket?.[phrase];
@@ -157,4 +199,4 @@ export const t: TFunction = (
     }
 
     return interpolate(translated, params, scope.locale);
-};
+}

@@ -23,6 +23,8 @@ import { serialize } from 'parse5';
 import { generateCustomId, interpolate, isICU, normalizeMarkupPlaceholders } from 'langsys-js-typescript/pure';
 import { deriveBlockIdentity } from './derivations.js';
 import { collectSlots, hasSingleTextNode, tokenizeHtml, type TokenSlot } from './tokenizer.js';
+import { interpolationNotices } from './translator.js';
+import type { Logger } from './logger.js';
 import { getScope } from './context.js';
 import { queueBlock, queueMiss } from './harvest.js';
 import { CONTENT_BLOCK_MARKER_EMIT, UNCATEGORIZED } from './constants.js';
@@ -93,6 +95,7 @@ function renderSlots(
     slots: readonly TokenSlot[],
     block: Record<string, unknown> | undefined,
     locale: string | undefined,
+    logger?: Logger,
 ): void {
     for (const slot of slots) {
         const translated = block?.[slot.token];
@@ -100,7 +103,7 @@ function renderSlots(
         // `''` both fall back to the source token rather than blanking the copy.
         const hit = typeof translated === 'string' && translated.length > 0;
         const raw = hit ? (translated as string) : slot.token;
-        const text = isICU(raw) ? interpolate(raw, {}, locale) : raw;
+        const text = isICU(raw) ? interpolate(raw, {}, locale, logger ? interpolationNotices(logger) : undefined) : raw;
         if (hit || text !== slot.token) slot.apply(text);
     }
 }
@@ -216,13 +219,13 @@ export function renderTranslateBlock(innerHtml: string, category = ''): Rendered
         // A miss, or the base locale. Rendered only when there is ICU to render (ICU-1); the
         // client core skips this pass for the same units.
         if (!carriesIcu) return { html: innerHtml, customId: identity.primary.id, missing, known, hostAttributes: stampContentBlock(resolvedId) };
-        renderSlots(slots, undefined, scope.locale);
+        renderSlots(slots, undefined, scope.locale, scope.logger);
         return { html: serialize(fragment), customId: identity.primary.id, missing, known, hostAttributes: stampContentBlock(resolvedId) };
     }
 
     // Each slot writes back to exactly where its token came from. Excluded, phrase-marked,
     // code and nested content-block subtrees yield no slot, so they are left intact.
-    renderSlots(slots, entries, scope.locale);
+    renderSlots(slots, entries, scope.locale, scope.logger);
 
     return { html: serialize(fragment), customId: identity.primary.id, missing, known, hostAttributes: stampContentBlock(resolvedId) };
 }

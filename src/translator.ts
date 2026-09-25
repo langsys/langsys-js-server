@@ -15,7 +15,7 @@
 import { getScope, NO_SCOPE_MESSAGE, type RequestScope } from './context.js';
 import { queueMiss } from './harvest.js';
 import { UNCATEGORIZED } from './constants.js';
-import { convertLegacyCall, findUnusedParamKeys, interpolate, type LegacyEntryPoint } from 'langsys-js-typescript/pure';
+import { convertLegacyCall, findUnusedParamKeys, interpolate, type InterpolateOptions, type LegacyEntryPoint } from 'langsys-js-typescript/pure';
 import { warnOnceGlobal, type Logger } from './logger.js';
 import type { TranslateParams } from './types.js';
 
@@ -49,6 +49,7 @@ const CONSOLE_LOGGER: Logger = {
     warn: (...args: unknown[]) => console.warn('[langsys-js-server]', ...args),
     error: (...args: unknown[]) => console.error('[langsys-js-server]', ...args),
     warnOnce: (_key: string, message: string) => console.warn('[langsys-js-server]', message),
+    debugOnce() {},
 };
 
 const ELLIPSIS = /(?:\u2026|\.\.\.)\s*$/;
@@ -85,6 +86,34 @@ function suppressedTruncation(logger: Logger, bucket: Record<string, unknown> | 
  * key (MIG-4). The resolver and conversion are the core's, so this registers what the client core
  * registers for the same call.
  */
+/**
+ * The core's interpolation notices, routed to this server object's own logger (ICU-4, ICU-6). The
+ * core would otherwise print them through its process-wide logger, which this package's per-instance
+ * `debug` never reaches. A defaulted argument is normal and is noted only under `debug`; a formatter
+ * failure is a defect in the phrase and warns at every level. Both are deduplicated per template and
+ * locale, per server object.
+ */
+export function interpolationNotices(logger: Logger): InterpolateOptions {
+    return {
+        onDefaulted: (names, template, locale) =>
+            logger.debugOnce(
+                `icu-defaulted:${locale}\u0000${template}`,
+                `Interpolation defaulted ${names.length === 1 ? 'argument' : 'arguments'} ${names
+                    .map((n) => `"${n}"`)
+                    .join(', ')} for a '${locale}' phrase. That is normal when the source phrase does not ask for ` +
+                    `${names.length === 1 ? 'it' : 'them'}; pass the value in params if it should. Phrase: ${JSON.stringify(template)}`,
+            ),
+        onFormatterFailure: (error, template, locale) =>
+            logger.warnOnce(
+                `icu-formatter:${locale}\u0000${template}`,
+                `The message formatter failed on a '${locale}' phrase, so it was rendered by the SDK's own branch ` +
+                    `selection. Fix the phrase: ${JSON.stringify(template)}. Formatter error: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+            ),
+    };
+}
+
 function resolveLegacy(
     scope: RequestScope,
     arg: string,
@@ -180,7 +209,7 @@ function translate(
     // same until `langsys-js-typescript` `ff57476`. The two moved together, because a server
     // rendering `other` while the first client render shows the source is a hydration mismatch.
     // Plain text comes back from `interpolate` exactly as written.
-    if (!params) return interpolate(translated, {}, scope.locale);
+    if (!params) return interpolate(translated, {}, scope.locale, interpolationNotices(scope.logger));
 
     // Re-issue the base SDK's unmatched-param warning against the REQUEST's logger. The
     // vendored `warnUnmatchedParams` reads a module-global `debugEnabled` this package
@@ -198,5 +227,5 @@ function translate(
         );
     }
 
-    return interpolate(translated, params, scope.locale);
+    return interpolate(translated, params, scope.locale, interpolationNotices(scope.logger));
 }

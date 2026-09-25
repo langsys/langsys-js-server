@@ -7,10 +7,10 @@
 | **specVersion** | 8.2.15 (unpublished) |
 | **Spec revision read** | langsys2 f5568b88…, docs/sdk-spec.mdx blob b9fd4b5b1c15f7ba29656d550dca1f06013327c0 (specVersion 8.2.15, 113 rule ids). Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree f5568b88 docs/sdk-spec.mdx` at this write. The ids are pinned to this blob in `_dev_/conformance-summary.mjs`, which exits 2 if this line cites a different one |
 | **SDK revision** | `feature/838_write_key_gating` at this commit |
-| **Core** | `langsys-js-typescript/pure` at **`a639ae8c`**, resolved through a `node_modules` symlink to the sibling checkout, whose tree is clean at that commit and whose `dist` is byte-identical to a clean build of a `git archive` of it. Mutation batteries run against that clean build |
+| **Core** | `langsys-js-typescript/pure` at **`a924759c`**, resolved through a `node_modules` symlink to the sibling checkout, whose tree is clean at that commit and whose `dist` is byte-identical to a clean build of a `git archive` of it. Mutation batteries run against that clean build |
 | **Contract double** | `contract-fixture/`, vendored byte-exact from `langsys-js-typescript` `be6ccd72`, tree `542f57f5ffcb9038db1b7411152b7e31b96cb269`, recomputed by `tests/contract-fixture.test.ts` |
 | **Shared fixtures** | canonicalization-reference.json `34034931` (32 rows); mig-vectors.json `20f2bdd6` (70 rows); snapshot-vectors.json `594bd77a` (8 rows, 4 refusals, 1 load); interpolation-reference.json `017bffdd` (25 rows); server-message-vectors.json `c8125549`; custom-id-reference.json `633a09d9` (13 rows). Each is asserted by blob |
-| **Suite** | 780 passing, 1 skipped, 26 files (`npm test`, after `npm run build`), plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, 20 e2e passing with 1 skipped by design, and tarball acceptance with digest `1f284758e5ac3f6dbbb31a642252ca8c` — one `npm run test:all` on this tree, against the core's committed `a639ae8c` |
+| **Suite** | 786 passing, 1 skipped, 27 files (`npm test`, after `npm run build`), plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, 20 e2e passing with 1 skipped by design, and tarball acceptance with digest `1f284758e5ac3f6dbbb31a642252ca8c` — one `npm run test:all` on this tree, against the core's committed `a924759c` |
 | **Reproducing the suite** | Run **`npm run build` first** (the exit-drain, command and build-output tests drive `dist/`, and a named test fails if it is missing), and have **`../langsys-php-sdk` checked out** (`shared-fixtures.test.ts` reads two fixtures from it) |
 
 <!-- SUMMARY:START -->
@@ -29,16 +29,16 @@ By profile (first clause):
     1  server, binding
 
 By status (binding rules only):
-   76  implemented
+   77  implemented
     3  n/a (architecture: a framework-agnostic core has no validator, label or redirect)
-    2  partial
     1  n/a (architecture: no report lane)
     1  not implemented
+    1  partial
 
 By tier, binding rules only (CONF-2):
-   60  n/a (pure)
+   61  n/a (pure)
    17  contract
-    6  -
+    5  -
 ```
 <!-- SUMMARY:END -->
 
@@ -132,7 +132,7 @@ on the core's `/pure` resolver and converter.
 | ICU-1 | implemented | n/a (pure) | Graded on this package's `t()` and block path, not on the core's function (CONF-1). Through `t()`: `shared-fixtures` renders all 25 rows of langsys-php-sdk's `interpolation-reference.json` (blob `017bffdd`) through `run()` + `t()` in each row's locale, calling `t()` with no argument where a row omits params — "select: no params at all falls to other", "select: empty params falls to other" — and `translator` covers no params in scope, the category overload, a catalog hit, out of scope, and an empty map. Through `renderTranslateBlock`: `blocks` "ICU-1 on the block path" — single-token and multi-token blocks at the base locale, an ICU attribute, a catalog hit, an untranslated registered token, out of scope, and two controls (a no-ICU block byte-identical; plain text beside ICU keeps its whitespace). Mutations: the in-scope short-circuit restored → 6 red (X1); out of scope → 1 (X2); an empty map short-circuiting too → 9 (P1); block slots never rendering ICU → 7 (B1). **Moved in the same wave as the client core** (`langsys-js-typescript` `ff57476`), because either side alone mismatches hydration. | all |
 | ICU-2 | implemented | n/a (pure) | Through `t()`: `shared-fixtures` rows "select: null argument treated as missing", "plural: NULL is missing, not zero" and "simple: null value left verbatim", and `translator` "ICU-2: a null argument is absent on the t() path, not the string "null"". Mutation: coerce `null` to `''` before `interpolate` → 2 red (N1), the plural and plain rows. The select vectors stay green under it, because an empty string also selects `other` — recorded so the count is not read as covering them. | all |
 | ICU-3 | implemented | n/a (pure) | Through `t()`: `shared-fixtures` rows "nested: missing arg inside satisfied branch" (`{n} amigos`), "nested: unsatisfied branch never evaluated", "plural: argument missing keeps sentence, shows gap", and the no-params and empty-map plural rows (`{count} mensajes`); `translator` "ICU-1 + ICU-3: a plural with no params keeps the sentence and shows {count}, not a number". On the block path, `blocks` "a multi-token block at the base locale renders the recovered plural". Recursion itself is the core function's; this path's obligation is to reach it on every call, and restoring either short-circuit turns the no-params plural tests red (X1, B1). | all |
-| ICU-4 | partial | - | No test. `interpolate` is the core's, whose defaulted-argument notice is asserted in the core's suite behind the core's own logger. Missing: evidence that the notice fires, and names the argument, under this package's `debug` option. | all |
+| ICU-4 | implemented | n/a (pure) | The core reports defaulted arguments through `interpolate`'s `onDefaulted` (langsys-js-typescript `a924759c`), and this package notes them through each server object's own logger: only under `debug`, naming every argument and the locale, once per (template, locale), on `t()` and the block path. The core's own notice sits behind its process-wide logger, which a server instance's `debug` cannot reach, so the hook is the path. `icu-4`: every argument and the locale named; one notice however often it renders, a second for another locale; the block path; per server object; controls — `debug` off, and every argument supplied, are silent. Mutations: notice ignores `debug` 1 red, no dedupe 1, `t()` not passing the hooks 3, block path not passing them 1, dedupe ignoring the locale 1. ICU-6's warning takes the same route through `onFormatterFailure`, so it too is deduplicated per server object. | all |
 | ICU-5 | implemented | n/a (pure) | Through `t()`: `translator` "ICU-5: a supplied plural keeps CLDR selection beside a missing select (ru, n=3 is few)", with a distinct word per branch; `shared-fixtures` rows "russian plural: few", "russian plural: 21 is one", "russian plural: 111 is many" and "simple: integer formatted per locale"; and the recovered literal surviving a present-and-null argument, "plural: NULL is missing, not zero". Mutations: the request locale not passed to `interpolate` → 6 red (L1); `null` coerced to `''` → the null-literal row red (N1). | all |
 | ICU-6 | implemented | n/a (pure) | The fallback is the core's `interpolate`; this row grades this package's paths into it. `shared-fixtures` renders the vector rows natively through `t()`. `icu-formatter-failure`: with the formatter forced to fail, `t()` and `renderTranslateBlock` render the vector through branch selection (`You have 3 cars`, `You have 1 car`, an unsupplied value as `{count}`), and the warning fires with debug off, naming the phrase, locale and error, once per template and locale; control: the unforced formatter renders natively and nothing warns. The suite formats with the `intl-messageformat` copy the shipped bundle uses (vitest inlines the core and dedupes it); before that, the forced failure never reached the core and the two warning tests were red. | all |
 | CID-1 | implemented | n/a (pure) | `shared-fixtures` against `langsys-php-sdk`'s `custom-id-reference.json`, blob **`633a09d9`**, 13 rows, each asserting `canonical_json`, `serialized_hex` and `custom_id` separately; the blob hash is recomputed and pinned. Covers U+2028/U+2029, non-BMP U+1F600, Cyrillic and slash-bearing categories. Authored in another lane. | all |
@@ -416,8 +416,6 @@ smallest one that should trip exactly one check.
    framework adapters that capture children are not built.
 2. **MIG-9 — the one-time import.** Held until the 907 merge lands the `translations` map on
    `POST /translatable-items`.
-3. **ICU-4 — no test** that the core's defaulted-argument notice fires, and names the argument,
-   under this package's `debug` option.
 
 ## Release-wave preconditions
 

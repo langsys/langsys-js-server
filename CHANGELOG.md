@@ -88,6 +88,11 @@ whose markup carries none of the listed constructs keep the ids they had.
 
 ### Changed
 
+- **Interpolation notices go through each server object's logger** (ICU-4, ICU-6). A defaulted ICU
+  argument is noted under the `debug` option, naming the arguments and the locale, once per phrase
+  and locale; a formatter failure warns at every level, deduplicated per server object. Both were
+  printed by the core's process-wide logger, which `debug` never reached.
+
 - **A phrase ending in an ellipsis is noted, and suppressed only when its full form is
   catalogued** (REG-11). `t()` does not register `Our water is filtered through seven…` when the
   catalog already holds a longer entry in the same category sharing that prefix; `Loading…` and

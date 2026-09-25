@@ -29,6 +29,8 @@ export interface Logger {
      * instance's signal is this project's own failure class wearing a helpful face.
      */
     warnOnce(key: string, message: string): void;
+    /** Log once per key, and only when debug logging is on — for notices that are normal, not defects. */
+    debugOnce(key: string, message: string): void;
 }
 
 const PREFIX = '[langsys-js-server]';
@@ -49,6 +51,11 @@ export function createLogger(debugEnabled: boolean): Logger {
             if (emitted.has(key)) return;
             emitted.add(key);
             warn(message);
+        },
+        debugOnce: (key, message) => {
+            if (!debugEnabled || emitted.has(`debug:${key}`)) return;
+            emitted.add(`debug:${key}`);
+            console.log(PREFIX, message);
         },
     };
 }

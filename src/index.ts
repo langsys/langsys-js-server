@@ -15,7 +15,8 @@ import { CatalogStore, DEFAULT_TTL_SECONDS, normalizeCatalog } from './catalog.j
 import { runInScope, type RequestScope } from './context.js';
 import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
-import { canonicalizeLocale } from 'langsys-js-typescript/pure';
+import { RESOLVED_MARKER_ATTR, canonicalizeLocale } from 'langsys-js-typescript/pure';
+import { resolveRequestLocale, type ResolveLocaleOptions, type ResolvedLocale } from './locale.js';
 import type {
     Catalog,
     KeyType,
@@ -53,6 +54,7 @@ export {
 } from './blocks.js';
 export { auditRenderedHtml, type AuditFinding, type AuditResult, type AuditOptions } from './audit.js';
 export type { Logger } from './logger.js';
+export type { ResolveLocaleOptions, ResolvedLocale } from './locale.js';
 export type {
     Catalog,
     CatalogCategory,
@@ -194,6 +196,11 @@ export class LangsysServer {
     private readonly flushOnExit: boolean;
     private exitHooks: { beforeExit: () => void; signal: (signal: NodeJS.Signals) => void } | undefined;
     private exitAttempted = false;
+    /**
+     * The locales the project serves, as authorization last reported them (SRV-6). A property
+     * of the project, identical for every request, like the key type.
+     */
+    private servedLocales: string[] | undefined;
 
     constructor(config: LangsysServerConfig) {
         if (!config.projectId) throw new Error('createLangsysServer: `projectId` is required');
@@ -290,7 +297,7 @@ export class LangsysServer {
 
         this.authorizing ??= this.api
             .authorize()
-            .then(({ status, keyType, writeEnabled, batchLimit }) => {
+            .then(({ status, keyType, writeEnabled, batchLimit, locales }) => {
                 if (!status) {
                     this.logger.error(
                         'Project authorization failed. Catalogs will not load and the page will ' +
@@ -302,6 +309,7 @@ export class LangsysServer {
                 this.keyType = keyType;
                 this.writeEnabled = writeEnabled;
                 if (batchLimit !== undefined) this.batchLimit = batchLimit;
+                if (locales?.length) this.servedLocales = locales;
                 if (keyType === 'unknown') {
                     this.logger.warn(
                         'Project authorization succeeded but returned no recognisable key type. ' +
@@ -424,6 +432,27 @@ export class LangsysServer {
      * For edge runtimes: pass this to `ctx.waitUntil()`. `setImmediate` semantics do not
      * exist there, and a Worker may be torn down the moment the response is returned.
      */
+/**
+     * Choose a request's locale (SRV-6): the URL, then a cookie, then `Accept-Language`, each
+     * validated against the locales the project serves. Returns the locale and the headers the
+     * response must name in `Vary`. Until authorization has reported the project's locales, only
+     * the base locale is served.
+     */
+    async resolveLocale(request: Request, options: ResolveLocaleOptions = {}): Promise<ResolvedLocale> {
+        await this.ensureAuthorized();
+        return resolveRequestLocale(request, this.servedLocales ?? [this.baseLocale], this.baseLocale, options);
+    }
+
+    /**
+     * The attribute a server render stamps on its root element (GATE-10, producing half):
+     * `data-ls-resolved` with the render locale when it is not the base locale, and nothing for
+     * a base-locale render, which is source and must stay discoverable.
+     */
+    resolvedRootAttributes(locale: string): Record<string, string> {
+        const canonical = canonicalizeLocale(locale);
+        return canonical === this.baseLocale ? {} : { [RESOLVED_MARKER_ATTR]: canonical };
+    }
+
     flush(result: RenderResult<unknown>): Promise<void> {
         // Reuse the scope that rendered, so this shares the once-only latch with the
         // drain `run()` already scheduled. Reconstructing a scope from the public fields

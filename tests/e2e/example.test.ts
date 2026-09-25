@@ -205,7 +205,7 @@ describe.skipIf(!built)('SPEC §13.1 — the acceptance test', () => {
     it('sets the right lang attribute per locale', async () => {
         for (const [path, lang] of [['', 'en'], ['it', 'it'], ['de', 'de'], ['ru', 'ru']] as const) {
             const html = await (await fetch(`${APP}/${path}`)).text();
-            expect(html).toContain(`<html lang="${lang}">`);
+            expect(html).toMatch(new RegExp(`<html lang="${lang}"[ >]`));
         }
     });
 
@@ -245,6 +245,36 @@ describe.skipIf(!built)('SRV-4 — the client is handed the catalog the server r
         expect(data).toContain('langsysCatalog');
         expect(data).toMatch(/"?langsysLocale"?:\s*"de"/);
         expect(data).not.toContain("L'idratazione");
+    });
+});
+
+// ---------------------------------------------------------------------------
+describe.skipIf(!built)('SRV-6 and GATE-10 on the served response', () => {
+    it('a URL locale needs no Vary; a header-negotiated one varies on Accept-Language', async () => {
+        const byUrl = await fetch(`${APP}/it`, { headers: { 'accept-language': 'de' } });
+        expect(byUrl.headers.get('vary') ?? '').not.toMatch(/accept-language|cookie/i);
+        expect(await byUrl.text()).toContain('<html lang="it"');
+
+        const byHeader = await fetch(`${APP}/`, { headers: { 'accept-language': 'it' } });
+        expect(byHeader.headers.get('vary') ?? '').toMatch(/accept-language/i);
+        expect(await byHeader.text()).toContain('<html lang="it"');
+    });
+
+    it('a cookie beats the header and varies on Cookie; an unsupported cookie is skipped', async () => {
+        const byCookie = await fetch(`${APP}/`, { headers: { cookie: 'locale=de', 'accept-language': 'it' } });
+        expect(byCookie.headers.get('vary') ?? '').toMatch(/cookie/i);
+        expect(await byCookie.text()).toContain('<html lang="de"');
+
+        const unsupported = await fetch(`${APP}/`, { headers: { cookie: 'locale=xx', 'accept-language': 'it' } });
+        expect(await unsupported.text()).toContain('<html lang="it"');
+        expect(unsupported.headers.get('set-cookie')).toBeNull();
+    });
+
+    it('a non-base render marks its root resolved; the base render does not', async () => {
+        expect(await (await fetch(`${APP}/it`)).text()).toContain('<html lang="it" data-ls-resolved="it">');
+        const base = await (await fetch(APP)).text();
+        expect(base).toContain('<html lang="en">');
+        expect(base).not.toContain('data-ls-resolved');
     });
 });
 

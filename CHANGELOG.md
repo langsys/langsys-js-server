@@ -60,6 +60,14 @@ whose markup carries none of the listed constructs keep the ids they had.
   registration the server had accepted was logged as `Failed to register`. It now branches
   on status before parsing.
 
+### Added
+
+- **`langsys.resolveLocale(request)`** (SRV-6). Picks the locale from the URL, then a cookie,
+  then `Accept-Language`, validated against the project's served locales from authorization,
+  and returns the `Vary` headers the choice depended on.
+- **`langsys.resolvedRootAttributes(locale)`** (GATE-10). The `data-ls-resolved` marker for a
+  non-base render's root element; nothing for a base-locale render.
+
 ### Changed
 
 Everything here can move a `custom_id`:

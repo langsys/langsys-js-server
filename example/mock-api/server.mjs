@@ -114,7 +114,7 @@ const server = createServer(async (req, res) => {
 
     // ---- the real API shape ----
     if (path.startsWith('/api/authorize-project/')) {
-        return json(res, { status: true, data: { key_type: keyType } });
+        return json(res, { status: true, data: { key_type: keyType, base_locale: 'en', target_locales: ['it', 'de', 'ru'] } });
     }
 
     if (path === '/api/translations') {

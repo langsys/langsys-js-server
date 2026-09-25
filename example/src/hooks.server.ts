@@ -14,14 +14,19 @@
  * production and looks perfect in the base locale.
  */
 import type { Handle } from '@sveltejs/kit';
-import { langsys, BASE_LOCALE, isLocale } from '$lib/langsys';
+import { langsys } from '$lib/langsys';
 
 export const handle: Handle = async ({ event, resolve }) => {
-    // Locale from the URL, not from content negotiation. Deterministic locale resolution
-    // is a hard requirement for the hydration hand-off: the client must seed the SAME
-    // catalog the server rendered against.
-    const segment = event.url.pathname.split('/')[1];
-    const locale = isLocale(segment) ? segment : BASE_LOCALE;
+    // SRV-6: the URL's first segment, then a `locale` cookie, then `Accept-Language`, each
+    // checked against the locales the project serves. The response varies on whatever the
+    // choice depended on, so a cache in front of the site keys on it too.
+    const { locale, vary } = await langsys.resolveLocale(event.request);
+    if (vary.length) event.setHeaders({ vary: vary.join(', ') });
+    // GATE-10: a non-base render marks its root as already-resolved output, so a client SDK on
+    // the page records no misses for text the server translated. A base render stays source.
+    const rootAttributes = Object.entries(langsys.resolvedRootAttributes(locale))
+        .map(([name, value]) => ` ${name}="${value}"`)
+        .join('');
 
     // Seed `locals` BEFORE the render, not after.
     //
@@ -37,7 +42,7 @@ export const handle: Handle = async ({ event, resolve }) => {
         { locale, catalog: event.locals.langsysCatalog },
         () =>
             resolve(event, {
-                transformPageChunk: ({ html }) => html.replace('%lang%', locale),
+                transformPageChunk: ({ html }) => html.replace('%lang%', locale).replace('%langsys.root%', rootAttributes),
             }),
     );
 

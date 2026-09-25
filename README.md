@@ -275,6 +275,9 @@ titles, meta) are the ones that never self-register.
 - **Never in the TTFB path.** Drained after the response flushes.
 - **Deduplicated.** A page rendering the same missing phrase 50 times posts it once.
 - **Write key only**, and it says so out loud.
+- **Retried, not dropped.** A failed send pauses registration for 3s, doubling to 5 minutes; what
+  did not go out stays with its request and is sent when the endpoint recovers, and a best-effort
+  attempt runs when the process exits (`flushOnExit`). Not a guarantee: `flush(result)` is.
 
 > **Harvesting requires a write key, which belongs in development.** A production
 > deployment should run a **read-only** key. A write key in production registers phrases
@@ -424,6 +427,8 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `langsys.run(options, fn)` | Run `fn` with a request-scoped translation context. Returns `{ value, catalog, locale, missing }`. |
 | `langsys.preloadCatalog(locale)` | Resolve a catalog without rendering — for hosts that must publish it to the client *before* the render reads it. |
 | `langsys.flush(result)` | Drain the miss queue now, returning the promise. For `ctx.waitUntil`. Safe alongside the drain `run()` schedules. |
+| `langsys.resolveLocale(request, options?)` | Choose a request's locale from a Fetch `Request`: the URL's first path segment or `?locale=`, then a `locale` cookie, then `Accept-Language`, each checked against the project's base and target locales. Returns `{ locale, source, vary }`; send `vary` in the response's `Vary` header. Options rename the query parameter and cookie or turn either source off. |
+| `langsys.resolvedRootAttributes(locale)` | `{ 'data-ls-resolved': locale }` for a render in a non-base locale, `{}` for the base locale. Spread onto the page's root element so a client SDK records no misses for text the server already translated. |
 | `langsys.invalidate(locale)` | Drop a locale's cached catalog across every worker sharing the cache. |
 | `t(phrase, category?, params?)` | Translate. Ambient inside `run()`. |
 | `auditRenderedHtml(html, logger?, options?)` | Find primitives this version does not translate server-side. |

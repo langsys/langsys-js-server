@@ -816,7 +816,10 @@ describe('REG-7 — one send in flight at a time, per queue', () => {
             t('Two');
             t('Three');
         });
-        await new Promise((r) => setTimeout(r, 200));
+        // Poll rather than sleep a fixed time: three sequential 30ms sends can outlast a fixed
+        // settle on a loaded machine. performance.now(), since other tests in this file fake Date.
+        const deadline = performance.now() + 3_000;
+        while (h.registerCalls() < 3 && performance.now() < deadline) await new Promise((r) => setTimeout(r, 20));
         expect(h.registerCalls(), 'the queue must actually have been chunked').toBe(3);
         expect(h.maxInFlight()).toBe(1);
     });

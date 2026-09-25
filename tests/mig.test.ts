@@ -7,15 +7,16 @@ import { createLangsysServer, t, readLegacyKeyFiles, type LegacyKeyFile } from '
 
 /**
  * The MIG family on the server's `t()`, driven by the core's `mig-vectors.json` (blob
- * `822dcc82ba9ddfef593d9cf173bbd6748de02947`). The resolver and converter are the core's, from
+ * `20f2bdd678cb33981e3064e42d43ca62783920ad`, core `a639ae8c`). The resolver and converter are the core's, from
  * `/pure`; these tests prove this package's `t()` reaches them and registers the same phrases the
  * browser core does. Rows outside the JS format set (`core_formats.js`) are not run, except as
  * refusals.
  */
 const VECTORS = new URL('../node_modules/langsys-js-typescript/tests/fixtures/mig-vectors.json', import.meta.url);
-const VECTORS_BLOB = '822dcc82ba9ddfef593d9cf173bbd6748de02947';
+const VECTORS_BLOB = '20f2bdd678cb33981e3064e42d43ca62783920ad';
 const v = JSON.parse(readFileSync(VECTORS, 'utf8'));
 const JS: string[] = v.core_formats.js;
+const JS_ENTRY_POINTS: string[] = v.core_entry_points.js;
 const inJsSet = (format: string | null | undefined) => format === null || format === undefined || JS.includes(format);
 
 type Item = { type: string; phrase?: string; category?: string };
@@ -52,6 +53,7 @@ it('mig-vectors.json is the blob this package is pinned to', () => {
     const raw = readFileSync(VECTORS);
     expect(createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex')).toBe(VECTORS_BLOB);
     expect(JS).toEqual(['i18next', 'vue-i18n', 'plain']);
+    expect([...JS_ENTRY_POINTS].sort()).toEqual(['i18next', 't', 'vue-i18n']);
 });
 
 describe('MIG-1 — the mode is explicit and off by default', () => {
@@ -83,7 +85,7 @@ describe('MIG-2/3/5/7 — resolution rows, through this package\'s t()', () => {
     });
 });
 
-const callRows = v.calls.filter((r: { entry_point: string }) => ['t', 'i18next', 'vue-i18n'].includes(r.entry_point));
+const callRows = v.calls.filter((r: { entry_point: string }) => JS_ENTRY_POINTS.includes(r.entry_point));
 describe('MIG-2 — a literal miss converts under the entry point that received it', () => {
     it.each(callRows.map((r: { id: string }) => [r.id, r]))('%s', async (_id, r: { entry_point: 't' | 'i18next' | 'vue-i18n'; text: string; params: Record<string, unknown>; expected: string }) => {
         const { langsys, registered } = server([{ name: 'en.json', data: {} }]);

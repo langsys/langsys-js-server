@@ -83,7 +83,8 @@ whose markup carries none of the listed constructs keep the ids they had.
 - **Catalog snapshots** (SNAP-1, SNAP-3). `langsys.exportSnapshot(locales, categories?)` and the
   `langsys-snapshot` command write the fleet's one format, `langsys-catalog-snapshot` v1: each
   locale's `GET /translations` filtered by category, with a SHA-256 checksum over a canonical
-  serialisation. `verifySnapshot()` loads one and refuses an edited file.
+  serialisation. `parseSnapshot()` loads one and refuses an edited file. The format, checksum and
+  loader are the core's, from `langsys-js-typescript/pure`.
 
 ### Changed
 

@@ -36,6 +36,21 @@ const render = async (s: ReturnType<typeof server>, ...phrases: string[]) => {
     return r.value;
 };
 const accepted = async () => (await double.state()).projects.p!.phrases.map((p) => p.phrase).sort();
+/**
+ * Poll the accepted state until it equals `want`, for positive assertions: a multi-chunk send under a
+ * loaded machine can outlast a fixed settle. Absence assertions keep a fixed wait instead — polling
+ * cannot prove that nothing will arrive.
+ */
+const acceptedEventually = async (want: string[], ms = 3_000) => {
+    // performance.now(), not Date.now(): several tests fake Date, and a faked deadline never arrives.
+    const deadline = performance.now() + ms;
+    let got = await accepted();
+    while (JSON.stringify(got) !== JSON.stringify(want) && performance.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 50));
+        got = await accepted();
+    }
+    return got;
+};
 
 describe('GATE-1 — the server-computed write_enabled decides, never key_type', () => {
     it('an ip_write key outside the allow-list holds back; after the allow-list widens it still does, until it learns so', async () => {
@@ -53,13 +68,13 @@ describe('GATE-1 — the server-computed write_enabled decides, never key_type',
         expect(await accepted()).toEqual([]);
         // Control, in the drifted world: a session that learns write_enabled: true writes.
         await render(server('ik'), 'Allowed');
-        expect(await accepted()).toEqual(['Allowed']);
+        expect(await acceptedEventually(['Allowed'])).toEqual(['Allowed']);
     });
 
     it('a plain write key registers — the positive control', async () => {
         await seed([{ key: 'wk', type: 'write' }]);
         await render(server('wk'), 'Written');
-        expect(await accepted()).toEqual(['Written']);
+        expect(await acceptedEventually(['Written'])).toEqual(['Written']);
     });
 });
 
@@ -73,7 +88,7 @@ describe('GATE-8 — a missing write_enabled is a version signal, never permissi
     it('CONTROL: a plain write key under the same server falls back and registers', async () => {
         await seed([{ key: 'wk', type: 'write' }], { config: { legacy_omit_capability: true } });
         await render(server('wk'), 'Fallback');
-        expect(await accepted()).toEqual(['Fallback']);
+        expect(await acceptedEventually(['Fallback'])).toEqual(['Fallback']);
     });
 });
 
@@ -94,7 +109,7 @@ describe('GATE-2 — a phrase seen before the decision is known is sent once it 
         vi.setSystemTime(T0 + 60_000);
         await render(s, 'Later');
         await new Promise((res) => setTimeout(res, 150));
-        expect(await accepted()).toEqual(['Early', 'Later']);
+        expect(await acceptedEventually(['Early', 'Later'])).toEqual(['Early', 'Later']);
     });
 });
 
@@ -109,7 +124,7 @@ describe('GATE-5 and REG-8 — a failed send is not marked registered, and lands
         vi.setSystemTime(T0 + 3_000);
         await render(s, 'Probe');
         await new Promise((res) => setTimeout(res, 150));
-        expect(await accepted()).toEqual(['Probe', 'Retried']);
+        expect(await acceptedEventually(['Probe', 'Retried'])).toEqual(['Probe', 'Retried']);
     });
 });
 
@@ -117,15 +132,17 @@ describe('REG-9 — batches fit the limit the double enforces', () => {
     it('five phrases against a limit of two all land; one oversized batch would be refused whole', async () => {
         await seed([{ key: 'wk', type: 'write' }], { config: { batch_limit: 2 } });
         await render(server('wk'), 'A', 'B', 'C', 'D', 'E');
-        expect(await accepted()).toEqual(['A', 'B', 'C', 'D', 'E']);
+        expect(await acceptedEventually(['A', 'B', 'C', 'D', 'E'])).toEqual(['A', 'B', 'C', 'D', 'E']);
     });
 });
 
-describe('REG-10 — a failed registration never reaches the render', () => {
-    it('a dropped connection on registration still renders, and nothing lands', async () => {
+describe('REG-10 — a failed registration never reaches the render', { timeout: 15_000 }, () => {
+    it('a dropped connection on registration still renders, and the phrase is retried rather than lost', async () => {
+        // The failure never reaches the render (REG-10); the send that died is held on its request
+        // and lands once the 3s window has passed (REG-8), so the double accepts it later.
         await seed([{ key: 'wk', type: 'write' }], { faults: [{ method: 'POST', path: '/translatable-items', drop: true }] });
         expect(await render(server('wk'), 'Dropped')).toEqual(['Dropped']);
-        expect(await accepted()).toEqual([]);
+        expect(await acceptedEventually(['Dropped'], 6_000)).toEqual(['Dropped']);
     });
 });
 
@@ -154,7 +171,7 @@ describe('WIRE-4 — a failed or unreachable catalog degrades and registers noth
     it('CONTROL: with the catalog answering, the same miss registers', async () => {
         await seed([{ key: 'wk', type: 'write' }]);
         await render(server('wk'), 'Outage copy');
-        expect(await accepted()).toEqual(['Outage copy']);
+        expect(await acceptedEventually(['Outage copy'])).toEqual(['Outage copy']);
     });
 });
 

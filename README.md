@@ -496,7 +496,7 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `langsys.errorBody(entries, top?)` | The default error envelope, `{ status: false, error: { ...top, errors } }`, with `validation_failed` as the default top entry. Optional: clients find entries wherever an app's own error body puts them. |
 | `langsys.registerTemplates(templates, { register? })` | Check every declared template and, with `register`, register the ones the catalog does not list. Returns `{ templates, problems, registered }`. Also available as the `langsys-messages` command. |
 | `langsys.exportSnapshot(locales, categories?)` | A `langsys-catalog-snapshot` v1 document: each locale's catalog filtered by category, checksummed, in the format every Langsys SDK loads. Throws on a failed fetch. Also available as the `langsys-snapshot` command. |
-| `verifySnapshot(document)` | Load a snapshot: resolves to it, or rejects naming why — an edited file (checksum), a different format, an unsupported version, a missing member. |
+| `parseSnapshot(document)` | Load a snapshot (a JSON string or a parsed object): returns it, or throws a `SnapshotError` whose `reason` names why — `checksum` (an edited file), `format`, `version`, `missing-member`, `not-json`. The core's loader. |
 | `langsys.bridge('i18next')`, `langsys.bridge('vue-i18n')` | A `t()` whose literal misses convert from that library's syntax, for call sites that still use it. |
 | `readLegacyKeyFiles([{ path, format?, namespace? }])` | Read the legacy-key mode's JSON files from disk (Node, Deno, Bun). |
 | `checkTemplate(template)` | Why a template may not be declared — a label marker such as `{field}`, or a framework placeholder such as `:attribute` — or `null`. |

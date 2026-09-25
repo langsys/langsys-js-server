@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createLangsysServer, canonicalSnapshotJson, verifySnapshot } from '../src/index.js';
+import { createLangsysServer, canonicalSnapshotJson, parseSnapshot, SnapshotError } from '../src/index.js';
 import { startDouble, type Double } from './support/double.js';
 
 /**
@@ -42,19 +42,19 @@ describe('SNAP-1 — the canonical serialisation', () => {
 describe('SNAP-1 — the loader refuses by name', () => {
     const doc = () => ({ format: 'langsys-catalog-snapshot', version: 1, ...structuredClone(ORACLE.body), checksum: ORACLE.checksum });
     it('accepts the oracle document', async () => {
-        expect((await verifySnapshot(doc())).catalog).toEqual(ORACLE.body.catalog);
+        expect(parseSnapshot(doc()).catalog).toEqual(ORACLE.body.catalog);
     });
     it('an edited file fails its checksum', async () => {
         const d = doc() as { catalog: { it: { Errors: Record<string, unknown> } } };
-        d.catalog.it.Errors['Line sep'] = 'hand-edited';
-        await expect(verifySnapshot(d)).rejects.toThrow(/checksum/);
+        d.catalog.it.Errors['Line\u2028sep'] = 'hand-edited';
+        expect(() => parseSnapshot(d)).toThrow(/checksum/);
     });
     it('a different format, an unsupported version, and a missing member each name the reason', async () => {
-        await expect(verifySnapshot({ ...doc(), format: 'other' })).rejects.toThrow(/format/);
-        await expect(verifySnapshot({ ...doc(), version: 2 })).rejects.toThrow(/version/);
+        expect(() => parseSnapshot({ ...doc(), format: 'other' })).toThrow(/format/);
+        expect(() => parseSnapshot({ ...doc(), version: 2 })).toThrow(/version/);
         const missing = doc() as Record<string, unknown>;
         delete missing.categories;
-        await expect(verifySnapshot(missing)).rejects.toThrow(/categories/);
+        expect(() => parseSnapshot(missing)).toThrow(/categories/);
     });
 });
 
@@ -94,7 +94,7 @@ describe('SNAP-1 — the export, against the contract double', () => {
         expect(snap.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
         expect(snap.catalog).toEqual({ it: { Errors: it_.Errors, UI: it_.UI }, de: { Errors: de.Errors, UI: de.UI } });
         expect(snap.catalog.it!.Errors!['Untranslated error.']).toBeNull();
-        expect(await verifySnapshot(JSON.parse(JSON.stringify(snap)))).toBeTruthy();
+        expect(parseSnapshot(JSON.stringify(snap))).toBeTruthy();
     });
 
     it('a category a locale does not hold is absent from that locale', async () => {
@@ -122,7 +122,44 @@ describe.skipIf(!existsSync(DIST))('SNAP-1 — the export command', { timeout: 2
             child.once('exit', resolve);
         });
         expect(code).toBe(0);
-        const snap = await verifySnapshot(JSON.parse(readFileSync(out, 'utf8')));
+        const snap = parseSnapshot(readFileSync(out, 'utf8'));
         expect(snap.catalog).toEqual({ it: { UI: (await apiCatalog('it')).UI }, de: { UI: (await apiCatalog('de')).UI } });
+    });
+});
+
+/**
+ * The core's `snapshot-vectors.json`, vendored by blob `594bd77a0289abfdf608508ac93cc9f4c4f88459` (core
+ * `a639ae8c`): 8 exact-bytes rows, 4 refusals, 1 reordered load. The serialisation is the core's
+ * own `canonicalSnapshotJson`; before this package took it from `/pure`, its independent
+ * implementation agreed with all 13 rows.
+ */
+const SNAPSHOT_VECTORS = new URL('../node_modules/langsys-js-typescript/tests/fixtures/snapshot-vectors.json', import.meta.url);
+const sv = JSON.parse(readFileSync(SNAPSHOT_VECTORS, 'utf8'));
+
+describe('snapshot-vectors.json', () => {
+    it('is the blob this package is pinned to', () => {
+        const raw = readFileSync(SNAPSHOT_VECTORS);
+        expect(createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex')).toBe('594bd77a0289abfdf608508ac93cc9f4c4f88459');
+        expect([sv.rows.length, sv.refusals.length, sv.loads.length]).toEqual([8, 4, 1]);
+    });
+    it.each(sv.rows.map((r: { id: string }) => [r.id, r]))('row: %s', (_id, r: { document: Record<string, unknown>; canonical: string; checksum: string }) => {
+        const { format: _f, version: _v, checksum: _c, ...payload } = r.document;
+        const canon = canonicalSnapshotJson(payload);
+        expect(canon).toBe(r.canonical);
+        expect('sha256:' + createHash('sha256').update(canon, 'utf8').digest('hex')).toBe(r.checksum);
+        expect(parseSnapshot(r.document).checksum).toBe(r.checksum);
+    });
+    it.each(sv.refusals.map((r: { id: string }) => [r.id, r]))('refusal: %s', (_id, r: { document: unknown; refuse: string }) => {
+        let caught: unknown;
+        try {
+            parseSnapshot(r.document);
+        } catch (e) {
+            caught = e;
+        }
+        expect(caught).toBeInstanceOf(SnapshotError);
+        expect((caught as SnapshotError).reason).toBe(r.refuse);
+    });
+    it.each(sv.loads.map((r: { id: string }) => [r.id, r]))('load: %s', (_id, r: { document: unknown; locale: string; expect_catalog: unknown }) => {
+        expect(parseSnapshot(r.document).catalog[r.locale]).toEqual(r.expect_catalog);
     });
 });

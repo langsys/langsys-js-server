@@ -13,7 +13,7 @@
 import { LangsysApi, DEFAULT_API_URL } from './api.js';
 import { CatalogStore, DEFAULT_TTL_SECONDS, normalizeCatalog } from './catalog.js';
 import { getScope, runInScope, type RequestScope } from './context.js';
-import { SNAPSHOT_FORMAT, SNAPSHOT_VERSION, byCodePoint, snapshotChecksum, type CatalogSnapshot } from './snapshot.js';
+import { buildSnapshot, type CatalogSnapshot, type SnapshotCategory } from './snapshot.js';
 import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue, queueMiss, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
 import { RESOLVED_MARKER_ATTR, canonicalizeLocale, createLegacyKeys, type LegacyEntryPoint, type LegacyKeys } from 'langsys-js-typescript/pure';
@@ -60,7 +60,15 @@ export {
 export { auditRenderedHtml, type AuditFinding, type AuditResult, type AuditOptions } from './audit.js';
 export type { Logger } from './logger.js';
 export type { ResolveLocaleOptions, ResolvedLocale } from './locale.js';
-export { canonicalSnapshotJson, verifySnapshot, SNAPSHOT_FORMAT, SNAPSHOT_VERSION, type CatalogSnapshot } from './snapshot.js';
+export {
+    canonicalSnapshotJson,
+    parseSnapshot,
+    SnapshotError,
+    SNAPSHOT_FORMAT,
+    SNAPSHOT_VERSION,
+    type CatalogSnapshot,
+    type SnapshotRefusal,
+} from './snapshot.js';
 export {
     DEFAULT_SERVER_MESSAGE_CATEGORY,
     SERVER_MESSAGE_CODES,
@@ -587,12 +595,12 @@ export class LangsysServer {
      * `langsys-catalog-snapshot` v1, checksummed. A category a locale's catalog does not hold is
      * absent from that locale; with no categories given, every category any locale holds is
      * exported. A failed fetch throws rather than producing a snapshot that would pass for one. A
-     * snapshot is a cache, refreshed by exporting again and never edited (SNAP-3); `verifySnapshot`
-     * refuses an edited one.
+     * snapshot is a cache, refreshed by exporting again and never edited (SNAP-3); `parseSnapshot`
+     * refuses an edited one. The format and its checksum are the core's `buildSnapshot`.
      */
     async exportSnapshot(locales: string | readonly string[], categories?: readonly string[]): Promise<CatalogSnapshot> {
-        const wanted = [...new Set((typeof locales === 'string' ? [locales] : locales).map((l) => canonicalizeLocale(l)))].sort(byCodePoint);
-        const fetched: Record<string, Catalog> = {};
+        const wanted = [...new Set((typeof locales === 'string' ? [locales] : locales).map((l) => canonicalizeLocale(l)))];
+        const catalogs: Record<string, Record<string, SnapshotCategory>> = {};
         for (const locale of wanted) {
             const res = await this.api.getTranslations(locale);
             const data = res.data as unknown;
@@ -600,26 +608,14 @@ export class LangsysServer {
                 throw new Error(`Could not export a snapshot for "${locale}": ${JSON.stringify(res.errors ?? res.status)}`);
             }
             // An empty project answers `data: []`.
-            fetched[locale] = (Array.isArray(data) ? {} : data) as Catalog;
+            catalogs[locale] = (Array.isArray(data) ? {} : data) as Record<string, SnapshotCategory>;
         }
-        const chosen = [...new Set(categories ?? Object.values(fetched).flatMap((c) => Object.keys(c)))].sort(byCodePoint);
-        const catalog: Record<string, Catalog> = {};
-        for (const locale of wanted) {
-            const held: Catalog = {};
-            for (const category of chosen) {
-                if (Object.prototype.hasOwnProperty.call(fetched[locale], category)) held[category] = fetched[locale]![category]!;
-            }
-            catalog[locale] = held;
-        }
-        const doc = {
-            project_id: String(this.projectId),
-            generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-            base_locale: this.baseLocale,
-            locales: wanted,
-            categories: chosen,
-            catalog,
-        };
-        return { format: SNAPSHOT_FORMAT, version: SNAPSHOT_VERSION, ...doc, checksum: await snapshotChecksum(doc) };
+        return buildSnapshot({
+            projectId: String(this.projectId),
+            baseLocale: this.baseLocale,
+            catalogs,
+            categories: [...(categories ?? Object.values(catalogs).flatMap((c) => Object.keys(c)))],
+        });
     }
 
 /**

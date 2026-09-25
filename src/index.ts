@@ -12,11 +12,12 @@
 
 import { LangsysApi, DEFAULT_API_URL } from './api.js';
 import { CatalogStore, DEFAULT_TTL_SECONDS, normalizeCatalog } from './catalog.js';
-import { runInScope, type RequestScope } from './context.js';
-import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue, scheduleDrain } from './harvest.js';
+import { getScope, runInScope, type RequestScope } from './context.js';
+import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue, queueMiss, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
 import { RESOLVED_MARKER_ATTR, canonicalizeLocale } from 'langsys-js-typescript/pure';
 import { resolveRequestLocale, type ResolveLocaleOptions, type ResolvedLocale } from './locale.js';
+import { buildMessage, checkTemplate, DEFAULT_SERVER_MESSAGE_CATEGORY, type MessageInput, type ServerMessage } from './messages.js';
 import type {
     Catalog,
     KeyType,
@@ -55,6 +56,17 @@ export {
 export { auditRenderedHtml, type AuditFinding, type AuditResult, type AuditOptions } from './audit.js';
 export type { Logger } from './logger.js';
 export type { ResolveLocaleOptions, ResolvedLocale } from './locale.js';
+export {
+    DEFAULT_SERVER_MESSAGE_CATEGORY,
+    SERVER_MESSAGE_CODES,
+    checkTemplate,
+    fillTemplate,
+    resolveServerMessages,
+    templateMarkers,
+    toServerMessage,
+    type MessageInput,
+    type ServerMessage,
+} from './messages.js';
 export type {
     Catalog,
     CatalogCategory,
@@ -116,6 +128,9 @@ const AUTHORIZE_RETRY_MS = 60_000;
 
 /** REG-3: the longest a best-effort exit drain may hold a terminating process. */
 const SHUTDOWN_DRAIN_MS = 2_000;
+
+/** MSG-8: how many emitted templates one server object remembers having queued. */
+const MAX_QUEUED_TEMPLATES = 10_000;
 
 export interface RenderResult<T> {
     value: T;
@@ -201,6 +216,14 @@ export class LangsysServer {
      * of the project, identical for every request, like the key type.
      */
     private servedLocales: string[] | undefined;
+    /** The category server message templates live under (MSG-6). */
+    readonly messageCategory: string;
+    /**
+     * Templates this server object has already queued for registration (MSG-8), so an API
+     * answering at its base locale — where no catalog is fetched to compare against — does not
+     * re-register the same sentence on every request. The same for every request; bounded.
+     */
+    private readonly queuedTemplates = new Set<string>();
 
     constructor(config: LangsysServerConfig) {
         if (!config.projectId) throw new Error('createLangsysServer: `projectId` is required');
@@ -211,6 +234,7 @@ export class LangsysServer {
         this.baseLocale = canonicalizeLocale(config.baseLocale);
         this.harvestEnabled = config.harvest ?? true;
         this.flushOnExit = config.flushOnExit ?? true;
+        this.messageCategory = config.messageCategory ?? DEFAULT_SERVER_MESSAGE_CATEGORY;
         this.logger = createLogger(config.debug ?? false);
         this.api = new LangsysApi(
             config.projectId,
@@ -451,6 +475,99 @@ export class LangsysServer {
     resolvedRootAttributes(locale: string): Record<string, string> {
         const canonical = canonicalizeLocale(locale);
         return canonical === this.baseLocale ? {} : { [RESOLVED_MARKER_ATTR]: canonical };
+    }
+
+/**
+     * Build a server message entry (MSG-1, MSG-4) and, inside `run()`, register its template.
+     *
+     * A template the request's catalog does not list under `messageCategory` is queued after the
+     * response on the ordinary drain, under the same write gate, so the first user sees the source
+     * and later ones the translation (MSG-8). A marker filled with a string that is itself a phrase
+     * in the catalog warns once per template and marker: a translatable value in a marker can
+     * never be translated (MSG-11).
+     */
+    message(input: MessageInput): ServerMessage {
+        const entry = buildMessage(input);
+        const scope = getScope();
+        if (!scope) return entry;
+
+        const bucket = scope.catalog[this.messageCategory] as Record<string, unknown> | undefined;
+        const listed = bucket !== undefined && Object.prototype.hasOwnProperty.call(bucket, input.template);
+        if (!listed && scope.catalogAvailable && !this.queuedTemplates.has(input.template)) {
+            if (this.queuedTemplates.size < MAX_QUEUED_TEMPLATES) this.queuedTemplates.add(input.template);
+            queueMiss(scope, input.template, this.messageCategory);
+        }
+
+        for (const [name, value] of Object.entries(input.params ?? {})) {
+            if (typeof value !== 'string' || !value) continue;
+            const catalogued = Object.values(scope.catalog).some(
+                (b) => typeof b === 'object' && b !== null && Object.prototype.hasOwnProperty.call(b, value),
+            );
+            if (catalogued) {
+                scope.logger.warnOnce(
+                    `msg-marker:${input.template}:${name}`,
+                    `The marker {${name}} in "${input.template}" was filled with "${value}", a catalogued ` +
+                        'phrase. A value in a marker is never translated, so the sentence will not agree ' +
+                        'with it; write the value into its own template instead.',
+                );
+            }
+        }
+        return entry;
+    }
+
+    /**
+     * The default error envelope (MSG-1): `{ status: false, error: { ...top, errors } }`, where the
+     * top entry defaults to `validation_failed`. An app with its own error body keeps it; clients
+     * resolve entries wherever they sit.
+     */
+    errorBody(errors: ServerMessage[], top?: MessageInput): { status: false; error: ServerMessage & { errors: ServerMessage[] } } {
+        const head = this.message(top ?? { code: 'validation_failed', template: 'The request failed validation.' });
+        return { status: false, error: { ...head, errors } };
+    }
+
+    /**
+     * List, check and optionally register every declared template (MSG-7).
+     *
+     * Each template is checked (MSG-3, MSG-11); a refused one is reported with where it came from
+     * and why, and is not registered. With `register`, templates the project's catalog does not
+     * already list under `messageCategory` are registered, so a second run registers nothing new.
+     */
+    async registerTemplates(
+        declared: readonly (string | { template: string; where?: string })[],
+        options: { register?: boolean } = {},
+    ): Promise<{ templates: string[]; problems: { template: string; where?: string; problem: string }[]; registered: string[] }> {
+        const templates: string[] = [];
+        const problems: { template: string; where?: string; problem: string }[] = [];
+        for (const item of declared) {
+            const template = typeof item === 'string' ? item : item.template;
+            const where = typeof item === 'string' ? undefined : item.where;
+            const problem = checkTemplate(template);
+            if (problem) problems.push({ template, ...(where ? { where } : {}), problem });
+            else if (!templates.includes(template)) templates.push(template);
+        }
+        if (!options.register || !templates.length) return { templates, problems, registered: [] };
+
+        await this.ensureAuthorized();
+        if (this.writeEnabled === false || (this.writeEnabled === undefined && this.keyType !== 'write')) {
+            problems.push({ template: '', problem: 'this API key may not register phrases; use a write key' });
+            return { templates, problems, registered: [] };
+        }
+        const probe = (this.servedLocales ?? []).find((l) => l !== this.baseLocale);
+        const listed = probe ? (await this.catalogs.get(probe)).catalog[this.messageCategory] : undefined;
+        const fresh = templates.filter((t) => !(listed && Object.prototype.hasOwnProperty.call(listed, t)));
+        const stride = Math.max(1, Math.floor(this.batchLimit) || 1);
+        const registered: string[] = [];
+        for (let i = 0; i < fresh.length; i += stride) {
+            const chunk = fresh.slice(i, i + stride);
+            const res = await this.api.createTranslatableItems(chunk.map((phrase) => ({ type: 'phrase', phrase, category: this.messageCategory })));
+            if (!res.status) {
+                problems.push({ template: '', problem: `registration failed after ${registered.length}: ${JSON.stringify(res.errors)}` });
+                break;
+            }
+            registered.push(...chunk);
+        }
+        if (registered.length && probe) await this.catalogs.invalidate(probe);
+        return { templates, problems, registered };
     }
 
     flush(result: RenderResult<unknown>): Promise<void> {

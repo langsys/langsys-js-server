@@ -67,6 +67,11 @@ whose markup carries none of the listed constructs keep the ids they had.
   and returns the `Vary` headers the choice depended on.
 - **`langsys.resolvedRootAttributes(locale)`** (GATE-10). The `data-ls-resolved` marker for a
   non-base render's root element; nothing for a base-locale render.
+- **Server messages** (MSG-1–MSG-4, MSG-6–MSG-8, MSG-11). `langsys.message()` builds an entry and
+  registers its template after the response when the catalog lacks it; `langsys.errorBody()` is the
+  default envelope; `checkTemplate()` refuses label markers and framework placeholders; and
+  `langsys.registerTemplates()` with its `langsys-messages` command lists, checks and registers every
+  declared template, exiting non-zero on a problem. New option `messageCategory` (default `Errors`).
 
 ### Changed
 

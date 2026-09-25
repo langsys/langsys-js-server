@@ -26,11 +26,15 @@
             "require": "./dist/index.js"
         }
     },
+    "bin": {
+        "langsys-messages": "bin/langsys-messages.mjs"
+    },
     "publishConfig": {
         "access": "public"
     },
     "files": [
         "dist",
+        "bin",
         "README.md",
         "CHANGELOG.md",
         "LICENSE"

@@ -97,9 +97,10 @@ describe.skipIf(!built)('built artifact', () => {
         }
 
         // Second, mangling-proof and tree-shake-proof signal. Deliberately a ceiling rather
-        // than a pin: brittle across dependency bumps, useful as corroboration. Bundling the
-        // graph roughly doubles this bundle (51,850 → 116,251 measured).
-        expect(esm.length).toBeLessThan(80_000);
+        // than a pin: brittle across dependency bumps, useful as corroboration. Measured with
+        // `npm run test:singleton-guard`: 81,178 bytes clean, 156,095 with the graph bundled, so
+        // the ceiling sits between them.
+        expect(esm.length).toBeLessThan(115_000);
     });
 
     it('declares no module-level mutable catalog state', () => {

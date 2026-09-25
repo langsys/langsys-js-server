@@ -52,6 +52,11 @@ export interface LangsysServerConfig {
      * that must not lose phrases calls `flush(result)` itself.
      */
     flushOnExit?: boolean;
+    /**
+     * The category server message templates are registered and looked up under (MSG-6). Must be
+     * the same on every client that renders them. Default `Errors`.
+     */
+    messageCategory?: string;
     fetch?: typeof globalThis.fetch;
 }
 

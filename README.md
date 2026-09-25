@@ -343,6 +343,34 @@ free.
 
 Reading is live now: `tokenizeHtml` skips subtrees carrying either spelling.
 
+## Server messages
+
+Validation errors and system messages never appear on a page a visitor or the discovery renderer
+sees before a user triggers them, so they cannot be discovered by rendering. The server registers
+them instead. Each is a whole source sentence with every translatable value written in — `The
+password is required.` and `The name is required.` are two templates — and `{name}` markers only
+for numbers, dates and raw input:
+
+```ts
+const entry = langsys.message({
+    field: 'password',
+    code: 'too_short',
+    template: 'The password must be at least {min} characters.',
+    params: { min: 12 },
+});
+// { field: 'password', code: 'too_short', message: 'The password must be at least 12 characters.',
+//   template: 'The password must be at least {min} characters.', params: { min: 12 } }
+return json(langsys.errorBody([entry]), { status: 422 });
+```
+
+Clients branch on `code` and render `t(template, 'Errors', params)`, falling back to `message`.
+To register every template before a user ever sees one, list them in a module and run the
+build-time command, which exits non-zero naming any template that breaks the rules:
+
+```sh
+LANGSYS_PROJECT_ID=… LANGSYS_API_KEY=<write key> npx langsys-messages ./messages.mjs --register
+```
+
 ## How this package is verified
 
 The Langsys SDK family has a documented, recurring failure class:
@@ -416,6 +444,7 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `cache` | `SharedCache` | none | Cross-worker tier. **Configure this in any multi-worker deployment** — see [Caching and freshness](#caching-and-freshness). |
 | `harvest` | `boolean` | `true` | Disable phrase registration outright, regardless of key type |
 | `flushOnExit` | `boolean` | `true` | Best-effort send of held phrases when the process exits (`beforeExit`, SIGTERM, SIGINT). Not a guarantee: call `flush(result)` where losing a phrase matters |
+| `messageCategory` | `string` | `'Errors'` | The category server message templates are registered and looked up under. Clients rendering the messages must use the same one |
 | `fetch` | `typeof fetch` | global | Inject a fetch implementation (tests, proxies, edge runtimes) |
 
 ### Exports
@@ -429,6 +458,11 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `langsys.flush(result)` | Drain the miss queue now, returning the promise. For `ctx.waitUntil`. Safe alongside the drain `run()` schedules. |
 | `langsys.resolveLocale(request, options?)` | Choose a request's locale from a Fetch `Request`: the URL's first path segment or `?locale=`, then a `locale` cookie, then `Accept-Language`, each checked against the project's base and target locales. Returns `{ locale, source, vary }`; send `vary` in the response's `Vary` header. Options rename the query parameter and cookie or turn either source off. |
 | `langsys.resolvedRootAttributes(locale)` | `{ 'data-ls-resolved': locale }` for a render in a non-base locale, `{}` for the base locale. Spread onto the page's root element so a client SDK records no misses for text the server already translated. |
+| `langsys.message({ code, template, params?, field? })` | A server message entry `{ field?, code, message, template, params? }`: `message` is the template filled, `params` only when it has markers. Inside `run()`, a template the catalog does not list is registered after the response, and a marker filled with a catalogued phrase warns once. |
+| `langsys.errorBody(entries, top?)` | The default error envelope, `{ status: false, error: { ...top, errors } }`, with `validation_failed` as the default top entry. Optional: clients find entries wherever an app's own error body puts them. |
+| `langsys.registerTemplates(templates, { register? })` | Check every declared template and, with `register`, register the ones the catalog does not list. Returns `{ templates, problems, registered }`. Also available as the `langsys-messages` command. |
+| `checkTemplate(template)` | Why a template may not be declared — a label marker such as `{field}`, or a framework placeholder such as `:attribute` — or `null`. |
+| `fillTemplate`, `templateMarkers`, `resolveServerMessages` | The shared marker grammar, filling, and finding entries in a response body. |
 | `langsys.invalidate(locale)` | Drop a locale's cached catalog across every worker sharing the cache. |
 | `t(phrase, category?, params?)` | Translate. Ambient inside `run()`. |
 | `auditRenderedHtml(html, logger?, options?)` | Find primitives this version does not translate server-side. |

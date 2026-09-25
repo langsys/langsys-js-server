@@ -43,19 +43,18 @@ const PHP_FIXTURE = new URL(
 const PHP_FIXTURE_BLOB = '633a09d9e1abd81bb1b77a7d861ff9328d734a48';
 
 /**
- * The core's, reached through the same `node_modules` symlink the walker-parity suite
- * uses. Provenance at this write: blob `5e9866c1579578ed2f0d4069deb4e1fe8330fb39`, written by
- * `a18e4a3` ("Rewrite the conformance record in the canonical format, and prove SSR cases
- * in isolation"). Recorded, deliberately NOT asserted: the core rewrites this file's prose
- * without moving a row (`1ae7bc29` at `6314f08` also had twenty-six cases), so the pins are
- * the spec blob and the row count below, and every row is asserted on its own.
+ * The core's, reached through the same `node_modules` symlink the walker-parity suite uses,
+ * and pinned by blob: `9027a603def2116e89456cd8979b422c4f050cd7`, 32 rows measured against spec
+ * blob `e22dad18`. The blob, the spec blob and the row count are each asserted, and every row
+ * is asserted on its own.
  */
 const CORE_FIXTURE = new URL(
     '../../node_modules/langsys-js-typescript/tests/fixtures/canonicalization-reference.json',
     import.meta.url,
 );
+const CORE_FIXTURE_BLOB = '9027a603def2116e89456cd8979b422c4f050cd7';
 /** The spec blob the core measured its rows against. */
-const CORE_FIXTURE_SPEC_BLOB = '5c5c0723f88fb8e6b13f58876c7adca8b6b35691';
+const CORE_FIXTURE_SPEC_BLOB = 'e22dad188f1c1e6a972961cdf9675a84d891f5ec';
 
 const phpPresent = existsSync(PHP_FIXTURE);
 const corePresent = existsSync(CORE_FIXTURE);
@@ -153,11 +152,11 @@ describe.skipIf(!corePresent)('langsys-js-typescript canonicalization-reference.
         expect(coreFixture.spec_blob ?? '').toContain(CORE_FIXTURE_SPEC_BLOB);
     });
 
-    it('has the twenty-six rows the core authored', () => {
-        // Was 19 against spec blob b657b490, then 23 against 8e2527b9. Each time the pin
-        // above fired on the spec_blob change rather than letting superseded expectations
-        // pass quietly — which is the whole reason that assertion exists.
-        expect(coreFixture.cases).toHaveLength(26);
+    it('is the blob this package is pinned to, with the thirty-two rows the core authored', () => {
+        const { createHash } = require('node:crypto') as typeof import('node:crypto');
+        const raw = readFileSync(CORE_FIXTURE);
+        expect(createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex')).toBe(CORE_FIXTURE_BLOB);
+        expect(coreFixture.cases).toHaveLength(32);
     });
 
     it.each(coreFixture.cases.map((c) => [c.id, c] as const))('%s', (_id, row) => {
@@ -181,18 +180,15 @@ describe.skipIf(!corePresent)('langsys-js-typescript canonicalization-reference.
  * server cores broke with a correct renderer underneath. So each row renders through
  * `run()` + `t()` in its own locale, exactly as an integrator's call would.
  *
- * Pinned provenance: blob `725e7908ffacb63a7f93efdcd5fae893d800e659`, written by `4c51eae`
- * ("Cover interpolation called with no params, and run the shared vectors through
- * translate()"), which added four rows — a select and a plural, each called with no params and
- * with an empty map. The first 19 are byte-identical to `d369bd18` (`5403824`), the blob the
- * core vendors. Before those four, no row in any lane called interpolation without params,
- * which is how the no-params short-circuit passed every lane's fixture.
+ * Pinned by blob: `017bffdd1d83a1b0a00a91f0d157a7fff726ee90`, 25 rows, the same blob the core
+ * vendors. Rows that omit `params` are calls with no argument at all (ICU-1); the last two are
+ * ICU-6's formatter-failure vectors.
  */
 const PHP_INTERPOLATION_FIXTURE = new URL(
     '../../../langsys-php-sdk/tests/fixtures/interpolation-reference.json',
     import.meta.url,
 );
-const PHP_INTERPOLATION_FIXTURE_BLOB = '725e7908ffacb63a7f93efdcd5fae893d800e659';
+const PHP_INTERPOLATION_FIXTURE_BLOB = '017bffdd1d83a1b0a00a91f0d157a7fff726ee90';
 const interpolationPresent = existsSync(PHP_INTERPOLATION_FIXTURE);
 
 interface InterpolationRow {
@@ -223,7 +219,7 @@ describe('langsys-php-sdk interpolation-reference.json, through this package\'s 
         const raw = readFileSync(PHP_INTERPOLATION_FIXTURE);
         const blob = createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex');
         expect(blob).toBe(PHP_INTERPOLATION_FIXTURE_BLOB);
-        expect(interpolationRows).toHaveLength(23);
+        expect(interpolationRows).toHaveLength(25);
     });
 
     it.each(interpolationRows.map((r) => [r.description, r] as const))('%s', async (_d, row) => {

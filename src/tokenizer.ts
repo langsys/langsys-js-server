@@ -24,6 +24,7 @@
 import { parseFragment } from 'parse5';
 import type { DefaultTreeAdapterMap } from 'parse5';
 import {
+    CONTENT_BLOCK_MARKER_ATTRS,
     PHRASE_MARKER_ATTRS,
     SKIP_ELEMENTS,
     TRANSLATABLE_ATTRIBUTES,
@@ -122,6 +123,44 @@ export function isPhraseMarked(element: Element): boolean {
 }
 
 /**
+ * Whether an element is a content-block host: a `data-ls-contentblock` or
+ * `data-langsys-contentblock` marker with any value but `false` or `0`, trimmed and compared
+ * case-insensitively (MARK-3). A stamped id and a bare or truthy declaration both count.
+ * Mirrors the core's `isContentBlockMarked`.
+ */
+export function isContentBlockMarked(element: Element): boolean {
+    return (CONTENT_BLOCK_MARKER_ATTRS as readonly string[]).some((attr) => {
+        if (!hasAttribute(element, attr)) return false;
+        const value = (getAttribute(element, attr) ?? '').trim().toLowerCase();
+        return value !== 'false' && value !== '0';
+    });
+}
+
+/**
+ * Whether a parsed unit has exactly one non-whitespace text node (TOK-6).
+ *
+ * Mirrors the core `Translate`'s `findSingleTextNode`, which is TOK's reference: every text node
+ * in the unit counts, including inside excluded, code and phrase-marked subtrees, except inside
+ * an excised content-block host (MARK-4).
+ */
+export function hasSingleTextNode(nodes: readonly Node[]): boolean {
+    let found = 0;
+    const walk = (children: readonly Node[]): boolean => {
+        for (const child of children) {
+            if (isTextNode(child)) {
+                if (normalizeTokenText(child.value) && ++found > 1) return false;
+            } else if (isElement(child) && isContentBlockMarked(child)) {
+                continue;
+            } else if (hasChildNodes(child) && !walk(child.childNodes)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    return walk(nodes) && found === 1;
+}
+
+/**
  * A token, together with the place in the tree it was read from.
  *
  * **This is what makes registration and substitution unable to drift.** They used to walk
@@ -141,6 +180,11 @@ export function isPhraseMarked(element: Element): boolean {
  */
 export interface TokenSlot {
     readonly token: string;
+    /**
+     * Where the token was read from. TOK-6 needs it: a unit is a phrase only when its one
+     * token is a `text` node; a single `attribute` token has no text node to render into.
+     */
+    readonly kind: 'text' | 'attribute' | 'option';
     /** Write a translation back to exactly where `token` was read from. */
     apply(translated: string): void;
 }
@@ -169,7 +213,7 @@ function setAttribute(element: Element, name: string, value: string): void {
 }
 
 function attributeSlot(element: Element, name: string, value: string): TokenSlot {
-    return { token: normalizeMarkupPlaceholders(value), apply: (t) => setAttribute(element, name, t) };
+    return { token: normalizeMarkupPlaceholders(value), kind: 'attribute', apply: (t) => setAttribute(element, name, t) };
 }
 
 /**
@@ -222,7 +266,7 @@ function tokenizeAttributes(
             // apply is deliberately a no-op: each option's own text node yields its own
             // slot during recursion and renders it there, so writing here as well would
             // render the option twice.
-            slots.push({ token: normalizeMarkupPlaceholders(optionText), apply: () => {} });
+            slots.push({ token: normalizeMarkupPlaceholders(optionText), kind: 'option', apply: () => {} });
         }
     }
 }
@@ -273,6 +317,10 @@ function walkSlots(
         if (isElement(node)) {
             if (isTranslationExcluded(node)) continue;
             if (isPhraseMarked(node)) continue;
+            // A nested content-block host is a unit of its own (MARK-4), whether stamped with an
+            // id or declared by a bare or truthy marker (MARK-3), so it contributes no tokens here
+            // and yields no slot — the enclosing render never writes into it.
+            if (isContentBlockMarked(node)) continue;
             // Divergence from both siblings, deliberate — see SKIP_ELEMENTS.
             if (skipCodeElements && (SKIP_ELEMENTS as readonly string[]).includes(node.tagName.toLowerCase())) {
                 continue;
@@ -281,16 +329,15 @@ function walkSlots(
         }
 
         if (isTextNode(node)) {
-            // JS `\s` matches U+00A0, so `&nbsp;` collapses here — and as of `langsys-php`
-            // `e28972c`, PHP collapses it too. This comment used to say the opposite; it was
-            // re-measured by executing their parser (`extractPhrases`, PHP 8.3.19) and kept
-            // as a correction, because a divergence note ages into a false claim the moment
-            // the other lane fixes something, and nothing here would have failed.
-            const contentToken = node.value.replace(/\s+/g, ' ').trim();
+            // The core's own canonicalization: strip the 28 C0 controls, collapse the JS `\s`
+            // set (U+00A0 included), trim — in that order (TOK-2). One function for text nodes
+            // and attributes, so the two paths cannot canonicalise the same words differently.
+            const contentToken = normalizeTokenText(node.value);
             if (contentToken) {
                 const text = node;
                 slots.push({
                     token: normalizeMarkupPlaceholders(contentToken),
+                    kind: 'text',
                     apply: (translated) => {
                         // Preserve the node's OWN leading and trailing whitespace and replace
                         // only the part that became a token. The token is trimmed — that is

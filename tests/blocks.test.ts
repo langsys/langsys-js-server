@@ -400,7 +400,11 @@ describe('.missing is a record of phrases, not of token positions', () => {
         const result = await run(() => renderTranslateBlock(html));
         expect(result.value.missing).toEqual([{ phrase: 'Repeat', category: '' }]);
         await new Promise((r) => setTimeout(r, 20));
-        expect(registered.flat().map((i) => i.phrase)).toEqual(['Repeat']);
+        // SRV-5, counted: the depth-3 block registers ONCE, as one content block (TOK-6). Its
+        // phrases keep every repeat because arity is identity, and the API files them once.
+        const items = registered.flat() as { type: string; phrases?: { phrase: string }[] }[];
+        expect(items.map((i) => i.type)).toEqual(['content_block']);
+        expect(items[0]!.phrases!.map((p) => p.phrase)).toEqual(['Repeat', 'Repeat', 'Repeat', 'Repeat']);
     });
 
     it('CONTROL: distinct phrases are all listed, in document order', async () => {
@@ -488,5 +492,158 @@ describe('ICU-1 on the block path — a block carrying ICU renders it with no pa
         // A token is whitespace-collapsed; the node is not. Writing a token back where the
         // rendering did not change it would silently rewrite "Hello   there".
         expect(await rendered(`<p>${PLURAL}</p><p>Hello   there</p>`)).toBe('<p>{count} items</p><p>Hello   there</p>');
+    });
+});
+
+describe('TOK-6 — the unit registers as a phrase only when its one token is its one text node', () => {
+    /**
+     * Shape is identity: a phrase and a block holding the same words are two catalog entries.
+     * The core's `Translate` is the reference — one token AND one non-whitespace text node in
+     * the unit takes the phrase path; everything else registers ONE content block under its
+     * `custom_id`, with its tokens as the block's phrases in order. Expectations are the
+     * spec's TOK-6 vectors.
+     */
+    type Item = { type: string; phrase?: string; custom_id?: string; category?: string; phrases?: { phrase: string }[] };
+    const registerOf = async (html: string) => {
+        const s = serve({});
+        await s.run(() => renderTranslateBlock(html));
+        await new Promise((r) => setTimeout(r, 20));
+        return s.registered.flat() as Item[];
+    };
+    const blockOf = (items: Item[]) => items.filter((i) => i.type === 'content_block');
+    const phrasesOf = (items: Item[]) => items.filter((i) => i.type === 'phrase').map((i) => i.phrase);
+
+    it('<p>Hello</p> registers one phrase and no block', async () => {
+        const items = await registerOf('<p>Hello</p>');
+        expect(phrasesOf(items)).toEqual(['Hello']);
+        expect(blockOf(items)).toEqual([]);
+    });
+
+    it('<p title="Tooltip">Hello</p> registers ONE block [Tooltip, Hello] under its custom_id, and no loose phrases', async () => {
+        const html = '<p title="Tooltip">Hello</p>';
+        const items = await registerOf(html);
+        expect(phrasesOf(items)).toEqual([]);
+        expect(blockOf(items).map((b) => ({ custom_id: b.custom_id, phrases: b.phrases }))).toEqual([
+            { custom_id: blockId(html, ''), phrases: [{ phrase: 'Tooltip' }, { phrase: 'Hello' }] },
+        ]);
+    });
+
+    it('an attribute-only unit, <img alt="Logo">, is a block [Logo] — it has no text node to render into', async () => {
+        const items = await registerOf('<img alt="Logo">');
+        expect(phrasesOf(items)).toEqual([]);
+        expect(blockOf(items).map((b) => b.phrases)).toEqual([[{ phrase: 'Logo' }]]);
+    });
+
+    it('svg does not change the shape: <p><svg><text>Label</text><path/></svg></p> is one phrase', async () => {
+        const items = await registerOf('<p><svg><text>Label</text><path></path></svg></p>');
+        expect(phrasesOf(items)).toEqual(['Label']);
+        expect(blockOf(items)).toEqual([]);
+    });
+
+    it('CONTROL: <p>Hello <b>bold</b></p> is a block, so registering every unit as a phrase fails', async () => {
+        const items = await registerOf('<p>Hello <b>bold</b></p>');
+        expect(phrasesOf(items)).toEqual([]);
+        expect(blockOf(items).map((b) => b.phrases)).toEqual([[{ phrase: 'Hello' }, { phrase: 'bold' }]]);
+    });
+
+    it('a phrase-shaped unit renders from the flat catalog, as t() would', async () => {
+        const { run } = serve({ __uncategorized__: { Hello: 'Ciao' } });
+        expect((await run(() => renderTranslateBlock('<p>Hello</p>'))).value.html).toBe('<p>Ciao</p>');
+    });
+
+    it('the same block rendered twice in one request registers once', async () => {
+        const html = '<p>One</p><p>Two</p>';
+        const s = serve({});
+        await s.run(() => {
+            renderTranslateBlock(html);
+            renderTranslateBlock(html);
+        });
+        await new Promise((r) => setTimeout(r, 20));
+        expect((s.registered.flat() as Item[]).filter((i) => i.type === 'content_block')).toHaveLength(1);
+    });
+
+    it('CONTROL: the same words under two categories are two blocks', async () => {
+        const html = '<p>One</p><p>Two</p>';
+        const s = serve({});
+        await s.run(() => {
+            renderTranslateBlock(html, 'a');
+            renderTranslateBlock(html, 'b');
+        });
+        await new Promise((r) => setTimeout(r, 20));
+        expect((s.registered.flat() as Item[]).filter((i) => i.type === 'content_block').map((i) => i.category)).toEqual(['a', 'b']);
+    });
+
+    it('a block-shaped unit registered as a block is KNOWN on the next render and not re-registered', async () => {
+        const html = '<p>One</p><p>Two</p>';
+        const s = serve({ __uncategorized__: { [blockId(html, '')]: { One: null, Two: null } as never } });
+        await s.run(() => renderTranslateBlock(html));
+        await new Promise((r) => setTimeout(r, 20));
+        expect(s.registered.flat()).toEqual([]);
+    });
+});
+
+describe('TOK-2 — the 28 C0 controls are stripped before collapse, on text and attributes', () => {
+    // Written as escapes, never literals. U+001C and U+000B are REMOVED, not collapsed.
+    const US = String.fromCodePoint(0x1c);
+    const VT = String.fromCodePoint(0x0b);
+
+    it('a text node: U+001C is removed, not mapped to a space', () => {
+        expect(tokenizeHtml(`<p>A${US}long   description</p>`)).toEqual(['Along description']);
+    });
+
+    it('a text node: VT is removed rather than collapsed', () => {
+        expect(tokenizeHtml(`<p>A${VT}long   description</p>`)).toEqual(['Along description']);
+    });
+
+    it('an attribute carrying U+001C — the vector every parser delivers', () => {
+        expect(tokenizeHtml(`<img alt="A${US}long   description">`)).toEqual(['Along description']);
+    });
+
+    it('CONTROL: TAB still collapses to a space, and U+007F and U+0085 are kept', () => {
+        expect(tokenizeHtml('<p>A\tb</p>')).toEqual(['A b']);
+        expect(tokenizeHtml(`<p>A${String.fromCodePoint(0x7f)}b</p>`)).toEqual([`A${String.fromCodePoint(0x7f)}b`]);
+        expect(tokenizeHtml(`<p>A${String.fromCodePoint(0x85)}b</p>`)).toEqual([`A${String.fromCodePoint(0x85)}b`]);
+    });
+
+    it('on render, the stripped key looks up and the translation lands in place', async () => {
+        const html = `<p>A${US}long   description</p><p>Two</p>`;
+        const { run } = serve({ __uncategorized__: { [blockId(html, '')]: { 'Along description': 'Una descrizione', Two: 'Due' } as never } });
+        expect((await run(() => renderTranslateBlock(html))).value.html).toBe('<p>Una descrizione</p><p>Due</p>');
+    });
+});
+
+describe('MARK-3/MARK-4 — a nested content-block host is excised from the enclosing unit', () => {
+    it('stamped and bare hosts contribute no tokens; a phrase host neither', () => {
+        const html =
+            '<p>Outer</p><div data-ls-contentblock="abc123"><p>Inner stamped</p></div>' +
+            '<div data-langsys-contentblock><p>Inner bare</p></div><span data-ls-phrase>Inner phrase</span>';
+        expect(tokenizeHtml(html)).toEqual(['Outer']);
+    });
+
+    it('truthy declarations excise too: true, 1 and YES, trimmed and case-insensitive', () => {
+        for (const v of ['true', '1', ' YES ', '']) {
+            expect(tokenizeHtml(`<p>Outer</p><div data-ls-contentblock="${v}"><p>Inner</p></div>`), v).toEqual(['Outer']);
+        }
+    });
+
+    it('CONTROL: an opt-out (="false", ="0") folds the text into the outer unit', () => {
+        for (const v of ['false', '0', ' FALSE ']) {
+            expect(tokenizeHtml(`<p>Outer</p><div data-ls-contentblock="${v}"><p>Inner</p></div>`), v).toEqual(['Outer', 'Inner']);
+        }
+    });
+
+    it('the enclosing render does not write into an excised host', async () => {
+        const html = '<p>Outer</p><div data-ls-contentblock="abc123"><p>Outer</p></div>';
+        const { run } = serve({ __uncategorized__: { Outer: 'Esterno' } });
+        expect((await run(() => renderTranslateBlock(html))).value.html).toBe(
+            '<p>Esterno</p><div data-ls-contentblock="abc123"><p>Outer</p></div>',
+        );
+    });
+
+    it('an excised host\'s text does not stop the unit\'s own text node being its only one (phrase shape)', async () => {
+        const s = serve({});
+        await s.run(() => renderTranslateBlock('<p>Outer</p><div data-ls-contentblock="abc123"><p>Inner</p></div>'));
+        await new Promise((r) => setTimeout(r, 20));
+        expect((s.registered.flat() as { type: string; phrase?: string }[]).map((i) => [i.type, i.phrase])).toEqual([['phrase', 'Outer']]);
     });
 });

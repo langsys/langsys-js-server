@@ -21,6 +21,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Catalog, KeyType, MissingPhrase } from './types.js';
 import type { Logger } from './logger.js';
+import type { TranslatableItem } from './api.js';
 
 export interface RequestScope {
     locale: string;
@@ -33,6 +34,15 @@ export interface RequestScope {
     missQueue: MissingPhrase[];
     /** Deduplication index for `missQueue`, so a page rendering the same miss 50 times posts it once. */
     missSeen: Set<string>;
+    /**
+     * Unknown content blocks this request rendered, each ONE `content_block` item under its
+     * `custom_id` (TOK-6). Request-scoped and drained exactly like `missQueue`.
+     */
+    blockQueue: TranslatableItem[];
+    /** Deduplication index for `blockQueue`, keyed on category and `custom_id`. */
+    blockSeen: Set<string>;
+    /** How many entries of `blockQueue` have been POSTed; the counterpart of `posted`. */
+    blocksPosted: number;
     projectId: string | number;
     baseLocale: string;
     logger: Logger;

@@ -138,6 +138,22 @@ export function queueMiss(scope: RequestScope, phrase: string, category: string)
 }
 
 /**
+ * Queue an unknown content block on the CURRENT request, deduplicated on category and id.
+ *
+ * One `content_block` item carrying the block's tokens as its phrases, in order — the shape
+ * the core's `registerContentBlock` sends and the API files under the `custom_id`. Sending the
+ * tokens as loose phrases instead registers words the block lookup never reads, so the block
+ * would never translate.
+ */
+export function queueBlock(scope: RequestScope, item: TranslatableItem): void {
+    const key = `${item.category ?? ''}\u0000${item.custom_id ?? ''}`;
+    if (scope.blockSeen.has(key)) return;
+    scope.blockSeen.add(key);
+    scope.blockQueue.push(item);
+    if (scope.drained) scope.onLateMiss?.();
+}
+
+/**
  * Whether harvesting may proceed, and a loud, once-per-process explanation when not.
  *
  * Mirrors `registerContentBlock`'s precedent: refuse LOCALLY and never make the call,
@@ -259,7 +275,8 @@ export async function drainMissQueue(
     if (scope.draining) return;
 
     const batch = scope.missQueue.slice(scope.posted);
-    if (batch.length === 0) {
+    const blocks = scope.blockQueue.slice(scope.blocksPosted);
+    if (batch.length === 0 && blocks.length === 0) {
         scope.drained = true;
         return;
     }
@@ -270,6 +287,7 @@ export async function drainMissQueue(
         // Mark the batch consumed. Otherwise every late miss re-triggers a drain that
         // refuses again, turning a read-only key into a scheduling loop.
         scope.posted = scope.missQueue.length;
+        scope.blocksPosted = scope.blockQueue.length;
         scope.drained = true;
         return;
     }
@@ -280,13 +298,14 @@ export async function drainMissQueue(
     const waitMs = backoff.remainingMs();
     if (waitMs > 0) {
         scope.posted = scope.missQueue.length;
+        scope.blocksPosted = scope.blockQueue.length;
         scope.drained = true;
         // Once per window. Under traffic every render in the window lands here, and a line
         // per render would bury the failure that opened it.
         if (backoff.shouldAnnounce()) {
             scope.logger.warn(
                 `Registration is backing off for ${Math.ceil(waitMs / 1000)}s after ` +
-                    `${backoff.consecutiveFailures} consecutive failed send(s). ${batch.length} ` +
+                    `${backoff.consecutiveFailures} consecutive failed send(s). ${batch.length + blocks.length} ` +
                     'phrase(s) from this render were not sent, and phrases from other renders in ' +
                     'this window will not be either, without another warning. They are not ' +
                     'retained: each registers the next time it renders after the window.',
@@ -297,14 +316,18 @@ export async function drainMissQueue(
 
     scope.draining = true;
 
-    const items: TranslatableItem[] = batch.map((miss: MissingPhrase) => ({
-        type: 'phrase',
-        phrase: miss.phrase,
-        category: miss.category,
-    }));
+    const items: TranslatableItem[] = [
+        ...batch.map((miss: MissingPhrase): TranslatableItem => ({
+            type: 'phrase',
+            phrase: miss.phrase,
+            category: miss.category,
+        })),
+        ...blocks,
+    ];
 
     // Advance BEFORE awaiting, so a late miss arriving mid-flight cannot be posted twice.
     scope.posted += batch.length;
+    scope.blocksPosted += blocks.length;
 
     // REG-9 — chunk to the server's cap, which it ENFORCES: an oversized batch is
     // rejected outright, so exceeding it does not send a big request, it loses every

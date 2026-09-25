@@ -20,11 +20,11 @@
  */
 
 import { serialize } from 'parse5';
-import { generateCustomId, interpolate, isICU } from 'langsys-js-typescript/pure';
+import { generateCustomId, interpolate, isICU, normalizeMarkupPlaceholders } from 'langsys-js-typescript/pure';
 import { deriveBlockIdentity } from './derivations.js';
-import { collectSlots, tokenizeHtml, type TokenSlot } from './tokenizer.js';
+import { collectSlots, hasSingleTextNode, tokenizeHtml, type TokenSlot } from './tokenizer.js';
 import { getScope } from './context.js';
-import { queueMiss } from './harvest.js';
+import { queueBlock, queueMiss } from './harvest.js';
 import { CONTENT_BLOCK_MARKER_EMIT, UNCATEGORIZED } from './constants.js';
 import type { MissingPhrase } from './types.js';
 
@@ -152,29 +152,58 @@ export function renderTranslateBlock(innerHtml: string, category = ''): Rendered
         }
     }
 
+    // TOK-6: the unit is a PHRASE when its one token is its one text node, and a content block
+    // otherwise — the core `Translate`'s routing. Shape is identity: the same words as a phrase
+    // and as a block are two catalog entries.
+    const phraseShaped = tokens.length === 1 && slots[0]!.kind === 'text' && hasSingleTextNode(fragment.childNodes);
+
+    // What the slots render from. A block entry wins when present — the token may be stored
+    // as a block, registered under this id by another SDK or an older shape — and a phrase
+    // falls back to the flat catalog, exactly as `t()` reads it.
+    let entries = block;
+    if (phraseShaped && !block) {
+        const token = tokens[0]!;
+        if (bucket !== undefined && Object.prototype.hasOwnProperty.call(bucket, token)) {
+            known = true;
+            entries = { [token]: (bucket as Record<string, unknown>)[token] };
+        }
+    }
+
+    // WIRE-4 clause 2: with no catalog a miss is indistinguishable from a hit, and registering
+    // turns an outage into a storm. A base-locale miss is not a miss.
     if (!known && scope.catalogAvailable && scope.locale !== scope.baseLocale) {
-        // WIRE-4 clause 2 applies here exactly as it does to `t()`: with no catalog a miss
-        // is indistinguishable from a hit, and registering turns an outage into a storm.
-        for (const token of tokens) queueMiss(scope, token, category);
+        if (phraseShaped) {
+            queueMiss(scope, tokens[0]!, category);
+        } else {
+            // ONE item under the block's id, carrying its tokens in order — the shape the
+            // core's `registerContentBlock` sends and the block lookup above reads back.
+            // `content` is the markup snapshot a translator sees; a server sees the host's
+            // inner HTML only, so that is what it carries.
+            queueBlock(scope, {
+                type: 'content_block',
+                custom_id: identity.primary.id,
+                category,
+                content: normalizeMarkupPlaceholders(innerHtml),
+                phrases: tokens.map((phrase) => ({ phrase })),
+            });
+        }
         // Deduplicated here, NOT in `tokens`. Arity is identity, so a repeated phrase stays in
-        // the token array four times; the returned record lists the phrases this block could
-        // not resolve, which is what registration sends and what a caller acts on.
+        // the token array four times; the returned record lists the phrases this unit could
+        // not resolve.
         missing.push(...[...new Set(tokens)].map((phrase) => ({ phrase, category })));
     }
 
-    if (!block) {
+    if (!entries) {
         // A miss, or the base locale. Rendered only when there is ICU to render (ICU-1); the
-        // client core skips this pass for the same blocks.
+        // client core skips this pass for the same units.
         if (!carriesIcu) return { html: innerHtml, customId: identity.primary.id, missing, known };
         renderSlots(slots, undefined, scope.locale);
         return { html: serialize(fragment), customId: identity.primary.id, missing, known };
     }
 
-    // Each slot writes back to exactly where its token came from. There is no index to
-    // fall out of step: a text node, an attribute, a button value each receive their own
-    // translation, and excluded, phrase-marked and code subtrees yield no slot at all, so
-    // they are left intact.
-    renderSlots(slots, block, scope.locale);
+    // Each slot writes back to exactly where its token came from. Excluded, phrase-marked,
+    // code and nested content-block subtrees yield no slot, so they are left intact.
+    renderSlots(slots, entries, scope.locale);
 
     return { html: serialize(fragment), customId: identity.primary.id, missing, known };
 }

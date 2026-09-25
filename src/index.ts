@@ -13,6 +13,7 @@
 import { LangsysApi, DEFAULT_API_URL } from './api.js';
 import { CatalogStore, DEFAULT_TTL_SECONDS, normalizeCatalog } from './catalog.js';
 import { getScope, runInScope, type RequestScope } from './context.js';
+import { SNAPSHOT_FORMAT, SNAPSHOT_VERSION, byCodePoint, snapshotChecksum, type CatalogSnapshot } from './snapshot.js';
 import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue, queueMiss, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
 import { RESOLVED_MARKER_ATTR, canonicalizeLocale } from 'langsys-js-typescript/pure';
@@ -56,6 +57,7 @@ export {
 export { auditRenderedHtml, type AuditFinding, type AuditResult, type AuditOptions } from './audit.js';
 export type { Logger } from './logger.js';
 export type { ResolveLocaleOptions, ResolvedLocale } from './locale.js';
+export { canonicalSnapshotJson, verifySnapshot, SNAPSHOT_FORMAT, SNAPSHOT_VERSION, type CatalogSnapshot } from './snapshot.js';
 export {
     DEFAULT_SERVER_MESSAGE_CATEGORY,
     SERVER_MESSAGE_CODES,
@@ -570,27 +572,45 @@ export class LangsysServer {
         return { templates, problems, registered };
     }
 
-/**
-     * A catalog snapshot for `locale` (SNAP-1): `GET /translations/data` filtered by category on
-     * this side, with no export endpoint. The shape is the catalog's, category to phrase to
-     * translation, so it loads as a preloaded catalog unchanged. A snapshot is a cache produced
-     * here and refreshed by exporting again, never edited by hand (SNAP-3). A failed fetch throws
-     * rather than returning an empty snapshot that would pass for one.
+    /**
+     * Export a catalog snapshot (SNAP-1): each locale's flat catalog from `GET /translations`,
+     * filtered by category on this side, in the one format every SDK writes and reads —
+     * `langsys-catalog-snapshot` v1, checksummed. A category a locale's catalog does not hold is
+     * absent from that locale; with no categories given, every category any locale holds is
+     * exported. A failed fetch throws rather than producing a snapshot that would pass for one. A
+     * snapshot is a cache, refreshed by exporting again and never edited (SNAP-3); `verifySnapshot`
+     * refuses an edited one.
      */
-    async exportSnapshot(locale: string, categories?: readonly string[]): Promise<Catalog> {
-        const res = await this.api.getTranslationData(locale);
-        const data = res.data;
-        if (!res.status || data === undefined || data === null || typeof data !== 'object') {
-            throw new Error(`Could not export a snapshot for "${locale}": ${JSON.stringify(res.errors ?? res.status)}`);
+    async exportSnapshot(locales: string | readonly string[], categories?: readonly string[]): Promise<CatalogSnapshot> {
+        const wanted = [...new Set((typeof locales === 'string' ? [locales] : locales).map((l) => canonicalizeLocale(l)))].sort(byCodePoint);
+        const fetched: Record<string, Catalog> = {};
+        for (const locale of wanted) {
+            const res = await this.api.getTranslations(locale);
+            const data = res.data as unknown;
+            if (!res.status || data === undefined || data === null || typeof data !== 'object') {
+                throw new Error(`Could not export a snapshot for "${locale}": ${JSON.stringify(res.errors ?? res.status)}`);
+            }
+            // An empty project answers `data: []`.
+            fetched[locale] = (Array.isArray(data) ? {} : data) as Catalog;
         }
-        // An empty project answers `data: []`.
-        const catalog = (Array.isArray(data) ? {} : data) as Catalog;
-        if (!categories) return catalog;
-        const out: Catalog = {};
-        for (const category of categories) {
-            if (Object.prototype.hasOwnProperty.call(catalog, category)) out[category] = catalog[category]!;
+        const chosen = [...new Set(categories ?? Object.values(fetched).flatMap((c) => Object.keys(c)))].sort(byCodePoint);
+        const catalog: Record<string, Catalog> = {};
+        for (const locale of wanted) {
+            const held: Catalog = {};
+            for (const category of chosen) {
+                if (Object.prototype.hasOwnProperty.call(fetched[locale], category)) held[category] = fetched[locale]![category]!;
+            }
+            catalog[locale] = held;
         }
-        return out;
+        const doc = {
+            project_id: String(this.projectId),
+            generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+            base_locale: this.baseLocale,
+            locales: wanted,
+            categories: chosen,
+            catalog,
+        };
+        return { format: SNAPSHOT_FORMAT, version: SNAPSHOT_VERSION, ...doc, checksum: await snapshotChecksum(doc) };
     }
 
     flush(result: RenderResult<unknown>): Promise<void> {

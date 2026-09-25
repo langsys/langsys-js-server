@@ -377,11 +377,12 @@ For a setup that should not call the API on the render path — a mobile bundle,
 air-gapped deploy — export the catalog for a locale and load it as the client's preloaded catalog:
 
 ```sh
-LANGSYS_PROJECT_ID=… LANGSYS_API_KEY=… npx langsys-snapshot --locale it --category UI --category Errors --out it.json
+LANGSYS_PROJECT_ID=… LANGSYS_API_KEY=… npx langsys-snapshot --locale it --locale de --category UI --category Errors --out snapshot.json
 ```
 
-A snapshot is a cache of the catalog, not a source. It is refreshed by exporting again, never by
-editing the file; translations are changed in Langsys, and the next export carries them.
+The file is a `langsys-catalog-snapshot` v1 document, the format every Langsys SDK writes and
+loads. A snapshot is a cache of the catalog, not a source: it is refreshed by exporting again,
+never by editing, and its checksum makes an edited file fail to load.
 
 ## How this package is verified
 
@@ -473,7 +474,8 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `langsys.message({ code, template, params?, field? })` | A server message entry `{ field?, code, message, template, params? }`: `message` is the template filled, `params` only when it has markers. Inside `run()`, a template the catalog does not list is registered after the response, and a marker filled with a catalogued phrase warns once. |
 | `langsys.errorBody(entries, top?)` | The default error envelope, `{ status: false, error: { ...top, errors } }`, with `validation_failed` as the default top entry. Optional: clients find entries wherever an app's own error body puts them. |
 | `langsys.registerTemplates(templates, { register? })` | Check every declared template and, with `register`, register the ones the catalog does not list. Returns `{ templates, problems, registered }`. Also available as the `langsys-messages` command. |
-| `langsys.exportSnapshot(locale, categories?)` | The catalog for `locale`, filtered by category, in the shape a client loads as its preloaded catalog. Throws on a failed fetch. Also available as the `langsys-snapshot` command. |
+| `langsys.exportSnapshot(locales, categories?)` | A `langsys-catalog-snapshot` v1 document: each locale's catalog filtered by category, checksummed, in the format every Langsys SDK loads. Throws on a failed fetch. Also available as the `langsys-snapshot` command. |
+| `verifySnapshot(document)` | Load a snapshot: resolves to it, or rejects naming why — an edited file (checksum), a different format, an unsupported version, a missing member. |
 | `checkTemplate(template)` | Why a template may not be declared — a label marker such as `{field}`, or a framework placeholder such as `:attribute` — or `null`. |
 | `fillTemplate`, `templateMarkers`, `resolveServerMessages` | The shared marker grammar, filling, and finding entries in a response body. |
 | `langsys.invalidate(locale)` | Drop a locale's cached catalog across every worker sharing the cache. |

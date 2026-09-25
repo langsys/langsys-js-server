@@ -178,14 +178,6 @@ export class LangsysApi {
         }) as Promise<ApiResponse<Catalog>>;
     }
 
-    /** `GET /translations/data`: the catalog grouped by category, as the export reads it (SNAP-1). */
-    async getTranslationData(locale: string): Promise<ApiResponse<Catalog>> {
-        return this.get('translations/data', {
-            project_id: String(this.projectId),
-            locale: canonicalizeLocale(locale),
-        }) as Promise<ApiResponse<Catalog>>;
-    }
-
     async createTranslatableItems(items: TranslatableItem[]): Promise<ApiResponse> {
         return this.send('POST', 'translatable-items', {
             project_id: this.projectId,

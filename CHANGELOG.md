@@ -75,9 +75,10 @@ whose markup carries none of the listed constructs keep the ids they had.
 - **`hostAttributes` on every rendered block** (MARK-1). `renderTranslateBlock()` returns the
   `data-ls-contentblock` attribute carrying the id the block resolved under, for the adapter to
   spread onto the host element.
-- **Catalog snapshots** (SNAP-1). `langsys.exportSnapshot(locale, categories?)` and the
-  `langsys-snapshot` command filter `GET /translations/data` by category into a file a client loads
-  as its preloaded catalog.
+- **Catalog snapshots** (SNAP-1, SNAP-3). `langsys.exportSnapshot(locales, categories?)` and the
+  `langsys-snapshot` command write the fleet's one format, `langsys-catalog-snapshot` v1: each
+  locale's `GET /translations` filtered by category, with a SHA-256 checksum over a canonical
+  serialisation. `verifySnapshot()` loads one and refuses an edited file.
 
 ### Changed
 

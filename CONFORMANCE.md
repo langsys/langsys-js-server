@@ -4,13 +4,13 @@
 |---|---|
 | **SDK** | `langsys-js-server` (server-side JS, the Node sibling to `langsys-php`) |
 | **Profiles** | all, server |
-| **specVersion** | 8.2.13 (unpublished) |
-| **Spec revision read** | langsys2 cd5468c7…, docs/sdk-spec.mdx blob abe122cf5346f92a0474b627d49451e6de9cd761 (specVersion 8.2.13, 113 rule ids). Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree cd5468c7 docs/sdk-spec.mdx` at this write. The ids are pinned to this blob in `_dev_/conformance-summary.mjs`, which exits 2 if this line cites a different one |
+| **specVersion** | 8.2.14 (unpublished) |
+| **Spec revision read** | langsys2 9b23f3d8…, docs/sdk-spec.mdx blob 33bbc4095ef2d13a55926b71045a7094f6b9706a (specVersion 8.2.14, 113 rule ids). Re-derived with `git -C ~/Documents/dev/langsys2 ls-tree 9b23f3d8 docs/sdk-spec.mdx` at this write. The ids are pinned to this blob in `_dev_/conformance-summary.mjs`, which exits 2 if this line cites a different one |
 | **SDK revision** | `feature/838_write_key_gating` at this commit |
 | **Core** | `langsys-js-typescript/pure` at **`be6ccd72`**, resolved through a `node_modules` symlink to the sibling checkout, whose `dist` is byte-identical to a clean build of a `git archive` of that commit. Mutation batteries run against that clean build |
 | **Contract double** | `contract-fixture/`, vendored byte-exact from `langsys-js-typescript` `be6ccd72`, tree `542f57f5ffcb9038db1b7411152b7e31b96cb269`, recomputed by `tests/contract-fixture.test.ts` |
 | **Shared fixtures** | canonicalization-reference.json `9027a603` (32 rows); interpolation-reference.json `017bffdd` (25 rows); server-message-vectors.json `c8125549`; custom-id-reference.json `633a09d9` (13 rows). Each is asserted by blob |
-| **Suite** | 697 passing, 1 skipped, 25 files (`npm test`, after `npm run build`). Plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, 20 e2e passing with 1 skipped by design, and tarball acceptance with digest `1f284758e5ac3f6dbbb31a642252ca8c` — all from one `npm run test:all` on this tree |
+| **Suite** | 703 passing, 1 skipped, 25 files, plus 4 runtimes × 26 checks with identity agreeing, the singleton-graph guard, and tarball acceptance with digest `1f284758e5ac3f6dbbb31a642252ca8c` — measured in a git worktree whose core is a clean build of committed `be6ccd72`. The 20 e2e tests (1 skipped by design) ran in the main tree, whose core symlink points at the sibling working tree. That tree currently carries uncommitted edits, among them its canonicalization fixture re-headed to this spec, so `shared-fixtures`' pins read red there until that lane commits and this one re-pins |
 | **Reproducing the suite** | Run **`npm run build` first** (the exit-drain, command and build-output tests drive `dist/`, and a named test fails if it is missing), and have **`../langsys-php-sdk` checked out** (`shared-fixtures.test.ts` reads two fixtures from it) |
 
 <!-- SUMMARY:START -->
@@ -80,8 +80,8 @@ their `custom_id` (TOK-6); before, each token registered as a loose phrase and a
 discovered never translated. Failed and skipped registrations are retained per request and
 retried (REG-8), held on an unknown decision (GATE-2), and drained on exit (REG-3). A failed
 catalog fetch is remembered (CACHE-2). New surface: `resolveLocale()`, `resolvedRootAttributes()`,
-`message()`, `errorBody()`, `registerTemplates()`, `exportSnapshot()`, the `langsys-messages` and
-`langsys-snapshot` commands, and `hostAttributes` on every rendered block. The MIG family waits on
+`message()`, `errorBody()`, `registerTemplates()`, `exportSnapshot()` and `verifySnapshot()` over the fleet's one snapshot format, the
+`langsys-messages` and `langsys-snapshot` commands, and `hostAttributes` on every rendered block. The MIG family waits on
 the core, which will ship the legacy-key converter in `/pure`.
 
 ---
@@ -179,9 +179,9 @@ the core, which will ship the legacy-key converter in `/pure`.
 | MIG-7 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
 | MIG-8 | not implemented | - | Waits on the core: the legacy-key resolver and converter decide the registered phrase, so they ship once, from `langsys-js-typescript/pure` (confirmed by that lane), and this package's migrate-mode `t()` reads the configured files and passes their data in. `mig-vectors.json` is not authored yet. | browser, server |
 | MIG-9 | not implemented | - | Held until the 907 merge lands the `translations` map on `POST /translatable-items`. | server |
-| SNAP-1 | implemented | contract | `langsys.exportSnapshot(locale, categories?)` and the `langsys-snapshot` command filter `GET /translations/data` by category, with no export endpoint. `snap` against the double: the snapshot equals the API's own `/translations/data` for the chosen categories and nothing else, null translations kept; no categories gives the whole catalog; a failed fetch throws. Mutations: filter removed 1 red, empty snapshot on failure 1. | server |
+| SNAP-1 | implemented | contract | One format, `langsys-catalog-snapshot` v1. `langsys.exportSnapshot(locales, categories?)` and the `langsys-snapshot` command read each locale's `GET /translations` and filter it by category, with no export endpoint; the document carries `project_id`, `generated_at` (UTC, seconds), `base_locale`, sorted `locales` and `categories`, `catalog` (locale → category → flat entries, a category the locale lacks absent) and a `sha256:` checksum over the canonical serialisation, which is built by hand: members in code point order, CID-1 escaping, no whitespace, `{}` for an empty map. `snap`: the canonical bytes and checksum equal an oracle computed by a different implementation (Python's `json.dumps(sort_keys=True, ensure_ascii=False, separators=(',', ':'))`) over the spec's cases — an empty category, an integer-like key, U+1F600 beside U+E000, U+2028, C0 controls, a block map with a null, a category held in one locale and not another; against the double, the exported catalog equals the API's `/translations` for the chosen categories and loads; the command's file loads. `snapshot-vectors.json` is not authored yet; it is vendored by blob when it is. Mutations: default `sort()` 3 red, object key order 3, uppercase `\u` hex 3, U+2028 escaped 3, checksum over `format`/`version` 3, missing member unchecked 1, checksum not compared 1, short escapes dropped 3. | server |
 | SNAP-2 | n/a (profile: browser, binding) | - | Profile `browser, binding`. | browser, binding |
-| SNAP-3 | implemented | n/a (pure) | The README documents a snapshot as a cache refreshed by re-export, never edited; nothing in this package reads a snapshot, so nothing treats one as authoritative over the catalog. | all |
+| SNAP-3 | implemented | n/a (pure) | `verifySnapshot()` recomputes the checksum and refuses, naming the reason, an edited file, a different `format`, an unsupported `version` and a missing member (`snap` "the loader refuses by name"); the README documents re-export as the only refresh. Nothing in this package reads a snapshot as authoritative over the catalog. | all |
 | BIND-1 | n/a (profile: binding) | - | Profile `binding`. This package is a server SDK, not a framework binding. | binding |
 | BIND-2 | n/a (profile: binding) | - | Profile `binding`. | binding |
 | BIND-3 | n/a (profile: binding) | - | Profile `binding`. | binding |
@@ -407,7 +407,7 @@ smallest one that should trip exactly one check.
 | a `FOO-1` row added | — | 2 | Rows for ids NOT in the pinned spec: FOO-1 |
 | MIG-9's status → `waiting` | — | 2 | Status or tier outside the canonical vocabulary: |
 | CID-1's tier → `n/a (contract fixture)` | — | 2 | Status or tier outside the canonical vocabulary: |
-| the header's blob → `b0474afb…` (8.2.12) | — | 2 | The "Spec revision read" header does not cite blob abe122cf…, which is the revision this script's id list was extracted from. |
+| the header's blob → `abe122cf…` (8.2.13) | — | 2 | The "Spec revision read" header does not cite blob 33bbc409…, which is the revision this script's id list was extracted from. |
 | ICU-4's status → `not implemented`, summary left as it was | `--check` | 1 | CONFORMANCE.md summary is STALE. Recompute: |
 
 ## Gaps, ranked by cost

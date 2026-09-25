@@ -570,6 +570,29 @@ export class LangsysServer {
         return { templates, problems, registered };
     }
 
+/**
+     * A catalog snapshot for `locale` (SNAP-1): `GET /translations/data` filtered by category on
+     * this side, with no export endpoint. The shape is the catalog's, category to phrase to
+     * translation, so it loads as a preloaded catalog unchanged. A snapshot is a cache produced
+     * here and refreshed by exporting again, never edited by hand (SNAP-3). A failed fetch throws
+     * rather than returning an empty snapshot that would pass for one.
+     */
+    async exportSnapshot(locale: string, categories?: readonly string[]): Promise<Catalog> {
+        const res = await this.api.getTranslationData(locale);
+        const data = res.data;
+        if (!res.status || data === undefined || data === null || typeof data !== 'object') {
+            throw new Error(`Could not export a snapshot for "${locale}": ${JSON.stringify(res.errors ?? res.status)}`);
+        }
+        // An empty project answers `data: []`.
+        const catalog = (Array.isArray(data) ? {} : data) as Catalog;
+        if (!categories) return catalog;
+        const out: Catalog = {};
+        for (const category of categories) {
+            if (Object.prototype.hasOwnProperty.call(catalog, category)) out[category] = catalog[category]!;
+        }
+        return out;
+    }
+
     flush(result: RenderResult<unknown>): Promise<void> {
         // Reuse the scope that rendered, so this shares the once-only latch with the
         // drain `run()` already scheduled. Reconstructing a scope from the public fields

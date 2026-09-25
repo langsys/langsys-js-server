@@ -72,6 +72,9 @@ whose markup carries none of the listed constructs keep the ids they had.
   default envelope; `checkTemplate()` refuses label markers and framework placeholders; and
   `langsys.registerTemplates()` with its `langsys-messages` command lists, checks and registers every
   declared template, exiting non-zero on a problem. New option `messageCategory` (default `Errors`).
+- **Catalog snapshots** (SNAP-1). `langsys.exportSnapshot(locale, categories?)` and the
+  `langsys-snapshot` command filter `GET /translations/data` by category into a file a client loads
+  as its preloaded catalog.
 
 ### Changed
 

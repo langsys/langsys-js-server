@@ -27,7 +27,8 @@
         }
     },
     "bin": {
-        "langsys-messages": "bin/langsys-messages.mjs"
+        "langsys-messages": "bin/langsys-messages.mjs",
+        "langsys-snapshot": "bin/langsys-snapshot.mjs"
     },
     "publishConfig": {
         "access": "public"

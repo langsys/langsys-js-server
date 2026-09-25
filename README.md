@@ -412,6 +412,7 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `catalogTtlSeconds` | `number` | `300` | Catalog freshness. Also the TTL written into the shared cache. |
 | `cache` | `SharedCache` | none | Cross-worker tier. **Configure this in any multi-worker deployment** — see [Caching and freshness](#caching-and-freshness). |
 | `harvest` | `boolean` | `true` | Disable phrase registration outright, regardless of key type |
+| `flushOnExit` | `boolean` | `true` | Best-effort send of held phrases when the process exits (`beforeExit`, SIGTERM, SIGINT). Not a guarantee: call `flush(result)` where losing a phrase matters |
 | `fetch` | `typeof fetch` | global | Inject a fetch implementation (tests, proxies, edge runtimes) |
 
 ### Exports

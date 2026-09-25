@@ -43,6 +43,12 @@ export interface RequestScope {
     blockSeen: Set<string>;
     /** How many entries of `blockQueue` have been POSTed; the counterpart of `posted`. */
     blocksPosted: number;
+    /**
+     * Items this request collected that have not gone out: a failed send, a drain inside a
+     * backoff window, or a write decision not known yet. Retried in this request's own drain
+     * (REG-8, GATE-2); never merged into another request's.
+     */
+    retryItems: TranslatableItem[];
     projectId: string | number;
     baseLocale: string;
     logger: Logger;

@@ -45,6 +45,13 @@ export interface LangsysServerConfig {
     cache?: SharedCache;
     /** Disable harvesting outright, regardless of key type. */
     harvest?: boolean;
+    /**
+     * Best-effort drain of held registrations when the process is about to exit — on
+     * `beforeExit`, and on SIGTERM/SIGINT where the runtime has them (REG-3). Default `true`.
+     * Best effort only: nothing runs on an OOM kill or a hard timeout, so a long-lived worker
+     * that must not lose phrases calls `flush(result)` itself.
+     */
+    flushOnExit?: boolean;
     fetch?: typeof globalThis.fetch;
 }
 

@@ -21,6 +21,7 @@
 import { LangsysApi, readWriteEnabled } from './api.js';
 import { canonicalizeLocale } from 'langsys-js-typescript/pure';
 import { UNCATEGORIZED } from './constants.js';
+import { REGISTRATION_BACKOFF_CEILING_MS, REGISTRATION_BACKOFF_INITIAL_MS } from './harvest.js';
 import type { Logger } from './logger.js';
 import type { Catalog, SharedCache } from './types.js';
 
@@ -99,6 +100,15 @@ export class CatalogStore {
      * already in flight cannot write a stale catalog back after the invalidation.
      */
     private readonly generations = new Map<string, number>();
+
+    /**
+     * CACHE-2: failed fetches per key, and until when lookups skip the API. The window starts
+     * at 3s, doubles on each consecutive failure to a 5 minute ceiling, and clears on the first
+     * success — REG-8's clock on the read side. Held on this instance, the server object's, so
+     * it is per project and locale and never shared with another project or written to the
+     * shared tier. Inside the window a lookup renders source and queues nothing (WIRE-4).
+     */
+    private readonly failureWindows = new Map<string, { failures: number; until: number }>();
 
     constructor(
         private readonly api: LangsysApi,
@@ -194,6 +204,9 @@ export class CatalogStore {
             );
         }
 
+        const window = this.failureWindows.get(key);
+        if (window && now < window.until) return { catalog: {}, ok: false };
+
         // Single-flight: coalesce concurrent misses for the same key.
         const existing = this.inFlight.get(key);
         if (existing) {
@@ -210,6 +223,18 @@ export class CatalogStore {
         const generation = this.generations.get(key) ?? 0;
 
         const promise = this.fetchAndStore(locale, key, generation)
+            .then((result) => {
+                // Recorded once per fetch, not once per waiter, so coalesced requests count
+                // as the one failure they are.
+                if (result.ok) {
+                    this.failureWindows.delete(key);
+                } else {
+                    const failures = (this.failureWindows.get(key)?.failures ?? 0) + 1;
+                    const delay = Math.min(REGISTRATION_BACKOFF_INITIAL_MS * 2 ** (failures - 1), REGISTRATION_BACKOFF_CEILING_MS);
+                    this.failureWindows.set(key, { failures, until: Date.now() + delay });
+                }
+                return result;
+            })
             .finally(() => this.inFlight.delete(key));
 
         this.inFlight.set(key, promise);

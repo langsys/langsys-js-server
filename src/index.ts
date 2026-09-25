@@ -13,7 +13,7 @@
 import { LangsysApi, DEFAULT_API_URL } from './api.js';
 import { CatalogStore, DEFAULT_TTL_SECONDS, normalizeCatalog } from './catalog.js';
 import { runInScope, type RequestScope } from './context.js';
-import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, drainMissQueue, scheduleDrain } from './harvest.js';
+import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
 import { canonicalizeLocale } from 'langsys-js-typescript/pure';
 import type {
@@ -112,6 +112,9 @@ function markUnavailable(catalog: Catalog): Catalog {
  */
 const AUTHORIZE_RETRY_MS = 60_000;
 
+/** REG-3: the longest a best-effort exit drain may hold a terminating process. */
+const SHUTDOWN_DRAIN_MS = 2_000;
+
 export interface RenderResult<T> {
     value: T;
     /** The catalog this render used. Hand it to a client SDK to seed hydration. */
@@ -186,6 +189,11 @@ export class LangsysServer {
      * `RegistrationBackoff` explains why each of those alternatives is wrong.
      */
     private readonly registrationBackoff = new RegistrationBackoff();
+    /** REG-8's retained items and GATE-2's held ones, each on the request that collected it. */
+    private readonly retained: RetainedQueue;
+    private readonly flushOnExit: boolean;
+    private exitHooks: { beforeExit: () => void; signal: (signal: NodeJS.Signals) => void } | undefined;
+    private exitAttempted = false;
 
     constructor(config: LangsysServerConfig) {
         if (!config.projectId) throw new Error('createLangsysServer: `projectId` is required');
@@ -195,6 +203,7 @@ export class LangsysServer {
         this.projectId = config.projectId;
         this.baseLocale = canonicalizeLocale(config.baseLocale);
         this.harvestEnabled = config.harvest ?? true;
+        this.flushOnExit = config.flushOnExit ?? true;
         this.logger = createLogger(config.debug ?? false);
         this.api = new LangsysApi(
             config.projectId,
@@ -213,6 +222,57 @@ export class LangsysServer {
                 this.writeEnabled = writeEnabled;
             },
         );
+        this.retained = new RetainedQueue(
+            async (scope, force) => {
+                // A request held on an unknown decision (GATE-2) re-reads it: authorization may
+                // have answered since. Any other request keeps the decision it rendered under.
+                if (scope.keyType === 'unknown' && scope.writeEnabled === undefined) {
+                    await this.ensureAuthorized();
+                    scope.keyType = this.keyType;
+                    scope.writeEnabled = this.writeEnabled;
+                }
+                await drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff, this.retained, force);
+            },
+            this.logger,
+            (size) => this.syncExitHooks(size),
+        );
+    }
+
+    /**
+     * REG-3: while anything is held, a best-effort drain runs when the process is about to exit.
+     * Registered only while the retained queue is non-empty, so an idle server object adds no
+     * process listeners. Once per process: an exit that still cannot send does not retry.
+     *
+     * On SIGTERM/SIGINT the handler removes itself before draining and, when no other listener
+     * remains, re-raises the signal afterwards, so the process still terminates as it would have
+     * without this package. The drain is bounded and never throws.
+     */
+    private syncExitHooks(size: number): void {
+        const proc = (globalThis as { process?: NodeJS.Process }).process;
+        if (!this.flushOnExit || typeof proc?.on !== 'function') return;
+        if (size > 0 && !this.exitHooks && !this.exitAttempted) {
+            const beforeExit = (): void => {
+                if (this.exitAttempted) return;
+                this.exitAttempted = true;
+                void this.retained.shutdown(SHUTDOWN_DRAIN_MS);
+            };
+            const signal = (sig: NodeJS.Signals): void => {
+                proc.off(sig, signal);
+                this.exitAttempted = true;
+                void this.retained.shutdown(SHUTDOWN_DRAIN_MS).finally(() => {
+                    if (proc.listenerCount(sig) === 0) proc.kill(proc.pid, sig);
+                });
+            };
+            proc.on('beforeExit', beforeExit);
+            proc.on('SIGTERM', signal);
+            proc.on('SIGINT', signal);
+            this.exitHooks = { beforeExit, signal };
+        } else if ((size === 0 || this.exitAttempted) && this.exitHooks) {
+            proc.off('beforeExit', this.exitHooks.beforeExit);
+            proc.off('SIGTERM', this.exitHooks.signal);
+            proc.off('SIGINT', this.exitHooks.signal);
+            this.exitHooks = undefined;
+        }
     }
 
     /**
@@ -322,6 +382,7 @@ export class LangsysServer {
             blockQueue: [],
             blockSeen: new Set(),
             blocksPosted: 0,
+            retryItems: [],
             projectId: this.projectId,
             baseLocale: this.baseLocale,
             logger: this.logger,
@@ -340,7 +401,7 @@ export class LangsysServer {
         // Phrases discovered after the scheduled drain — a streamed body still rendering
         // after `run()` resolved — schedule their own drain rather than being dropped.
         scope.onLateMiss = () => {
-            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff));
+            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff, this.retained));
         };
 
         // A render that throws must still harvest. Without the `finally`, a page that
@@ -351,7 +412,7 @@ export class LangsysServer {
         try {
             value = await runInScope(scope, async () => fn());
         } finally {
-            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff));
+            scheduleDrain(() => drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff, this.retained));
         }
 
         return { value, catalog, locale, missing: scope.missQueue, [SCOPE]: scope };
@@ -378,7 +439,7 @@ export class LangsysServer {
             return Promise.resolve();
         }
 
-        return drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff);
+        return drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff, this.retained);
     }
 
     /**

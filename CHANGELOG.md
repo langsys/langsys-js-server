@@ -50,6 +50,11 @@ whose markup carries none of the listed constructs keep the ids they had.
   no translations) is unaffected and still registers — that distinction is the whole fix.
 - **Locales go out lowercase** (WIRE-3). `0.1.0` sent `locale=de-DE` and cached under
   `langsys:catalog:es-CR`; the contract is `de-de`. Came in with the `/pure` swap.
+- **A multi-token `<Translate>` block registers as one content block** (TOK-6, CID-1). Every
+  token of an unknown block was registered as a loose phrase and nothing was registered under
+  the block's `custom_id`, so a block the server discovered never translated. It now registers
+  one `content_block` item carrying its tokens in order. A block whose only token is its only
+  text node registers as a phrase and renders from the flat catalog, as the client core does.
 - **An empty `204` success is a success** (WIRE-2). `send()` JSON-parsed every `ok`
   response, so a `204` with no body threw `SyntaxError: Unexpected end of JSON input` and a
   registration the server had accepted was logged as `Failed to register`. It now branches
@@ -84,13 +89,30 @@ Everything here can move a `custom_id`:
   entry. Harmless: catalogs are TTL'd and re-fetched, nothing durable is keyed on them.
 - `KeyType` gains `ip_write`, so a refusal on that key type can say something true instead
   of reporting an undetermined key.
-- **A failed registration backs off, per server instance** (REG-8). After a failed or
-  thrown send, nothing is sent for 3s, doubling on each consecutive failure to a 300s
-  ceiling and resetting on the first success. A render inside the window drops its misses
-  with one warning per window, and they register the next time they render after it. The
-  clock belongs to each `createLangsysServer()` instance, so one project's failing key never
-  throttles another's. Failed phrases are still **not** retained across requests — that
-  half of REG-8 is held for a spec ruling.
+- **A failed registration backs off and is retried, per server instance** (REG-8). After a
+  failed or thrown send, nothing is sent for 3s, doubling on each consecutive failure to a 300s
+  ceiling and resetting on the first success. Phrases that did not go out — a failed send, or a
+  render inside the window — stay on the request that collected them and are sent in that
+  request's own drain once the endpoint recovers; never merged into another request's send. At
+  most 2,000 are kept per server object, oldest dropped first with a warning. The clock belongs
+  to each `createLangsysServer()` instance, so one project's failing key never throttles
+  another's.
+- **A failed catalog fetch is remembered** (CACHE-2). For 3s after a failure, doubling to 5
+  minutes and clearing on the first success, lookups for that locale render source text without
+  fetching again, instead of paying a failing request on every render.
+- **An unknown write decision holds phrases** (GATE-2). When authorization has not answered with
+  a key type, phrases are kept and sent once it does, instead of being dropped.
+- **Held phrases drain when the process exits** (REG-3). On `beforeExit`, and on SIGTERM/SIGINT,
+  one bounded best-effort attempt sends what is still held; a signal still terminates the
+  process afterwards. Opt out with `flushOnExit: false`. Nothing runs on an OOM kill or a hard
+  timeout, so a worker that must not lose phrases calls `flush(result)`.
+- **C0 control characters are stripped from text nodes too** (TOK-2). U+0001–U+0008, U+000B,
+  U+000C and U+000E–U+001F are removed before whitespace collapses, as they already were in
+  attributes; a block whose text carries one moves id.
+- **A nested content-block host is excised from its enclosing block** (MARK-3, MARK-4). A
+  `data-ls-contentblock` / `data-langsys-contentblock` host inside a block — stamped, bare, or
+  `true`/`1`/`yes` — contributes no tokens and is not rendered into; `false` and `0` opt out.
+  Blocks containing one move id.
 
 ### Removed
 

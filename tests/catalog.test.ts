@@ -374,13 +374,22 @@ describe('a failed fetch is not cached and is not silent', () => {
         // `if (response.status && response.data)` -> `if (response.data)` survived: a
         // `{status:false, data:{}}` body was cached as a valid empty catalog, so every
         // page rendered base language for a full TTL.
-        const { api, fetches } = makeApi({ status: false, catalog: {} });
-        const store = new CatalogStore(api, logger(), 300);
+        // CACHE-2 skips the API for 3s after a failure, so the second fetch is taken past that
+        // window and well inside the 300s TTL: a failure memoized as a catalog would serve the
+        // empty catalog here without fetching.
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            const { api, fetches } = makeApi({ status: false, catalog: {} });
+            const store = new CatalogStore(api, logger(), 300);
 
-        expect((await store.get('it')).catalog).toEqual({});
-        expect((await store.get('it')).catalog).toEqual({});
-        expect(fetches, 'a failed fetch must not be memoized as a valid catalog').toHaveLength(2);
-        expect(console.error).toHaveBeenCalled();
+            expect((await store.get('it')).ok).toBe(false);
+            vi.setSystemTime(Date.now() + 3_000);
+            expect((await store.get('it')).ok).toBe(false);
+            expect(fetches, 'a failed fetch must not be memoized as a valid catalog').toHaveLength(2);
+            expect(console.error).toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('logs when the fetch throws, rather than rendering base language silently', async () => {

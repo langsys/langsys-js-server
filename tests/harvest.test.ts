@@ -57,6 +57,7 @@ function harness(
     let registerFails = opts.registerFails;
     let registerThrows = false;
     let registerNoContent = false;
+    let authorizeFails = false;
     let inFlight = 0;
     let maxInFlight = 0;
 
@@ -65,6 +66,7 @@ function harness(
 
         if (href.includes('authorize-project')) {
             authorizeCalls++;
+            if (authorizeFails) return new Response('down', { status: 500 });
             const data: Record<string, unknown> = { key_type: opts.keyType ?? 'write' };
             if (opts.writeEnabled !== undefined) data.write_enabled = opts.writeEnabled;
             if (opts.batchLimit !== undefined) {
@@ -137,6 +139,7 @@ function harness(
         setRegisterThrows: (v: boolean) => (registerThrows = v),
         maxInFlight: () => maxInFlight,
         setRegisterNoContent: (v: boolean) => (registerNoContent = v),
+        setAuthorizeFails: (v: boolean) => (authorizeFails = v),
     };
 }
 
@@ -938,7 +941,8 @@ describe('REG-8 — a failed send backs off, per instance', () => {
         expect(sent(h)).toContain('Recovered');
         h.setRegisterFails(true);
         await render(h, 'FailsAgain'); // a FIRST failure again -> 3s, not 6s
-        expect(h.registerCalls()).toBe(3);
+        // Four sends: Doomed, Recovered, Doomed's retained retry on that recovery, FailsAgain.
+        expect(h.registerCalls()).toBe(4);
         h.setRegisterFails(false);
         at(5_999);
         await render(h, 'TooSoon');
@@ -1174,5 +1178,140 @@ describe('WIRE-2 on the drain path — a 204 from registration is a success', ()
         await h.langsys.run({ locale: 'it' }, () => t('Next'));
         await settleDrain();
         expect(h.registered.flat().map((i) => i.phrase)).toContain('Next');
+    });
+});
+
+describe('REG-8 retention — a failed send stays queued on its own request', () => {
+    /**
+     * Items that did not go out stay on the request that collected them and are sent in that
+     * request's own drain once the window ends — here triggered by the next successful send.
+     * Never merged into another request's POST, and bounded per server object.
+     */
+    const T0 = Date.UTC(2026, 0, 1);
+    const at = (ms: number) => vi.setSystemTime(T0 + ms);
+    type H = ReturnType<typeof harness>;
+    const render = async (h: H, ...phrases: string[]) => {
+        await h.langsys.run({ locale: 'it' }, () => phrases.forEach((p) => t(p)));
+        await settleDrain();
+    };
+    const posts = (h: H) => h.registered.map((batch) => batch.map((i) => i.phrase));
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        at(0);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('a phrase whose send failed is sent again once the endpoint recovers', async () => {
+        const h = harness({ registerFails: true });
+        await render(h, 'Doomed');
+        h.setRegisterFails(false);
+        at(3_000);
+        await render(h, 'Probe');
+        await settleDrain();
+        expect(posts(h).flat().filter((p) => p === 'Doomed')).toHaveLength(2);
+    });
+
+    it('a phrase skipped inside the window is sent after it, not dropped', async () => {
+        const h = harness({ registerFails: true });
+        await render(h, 'Doomed');
+        h.setRegisterFails(false);
+        at(1_000);
+        await render(h, 'Skipped');
+        expect(posts(h).flat()).not.toContain('Skipped');
+        at(3_000);
+        await render(h, 'Probe');
+        await settleDrain();
+        expect(posts(h).flat()).toContain('Skipped');
+    });
+
+    it('retained items ride in their own request\'s send, never in another request\'s', async () => {
+        const h = harness({ registerFails: true });
+        await render(h, 'Doomed');
+        h.setRegisterFails(false);
+        at(3_000);
+        await render(h, 'Probe');
+        await settleDrain();
+        expect(posts(h).some((b) => b.includes('Probe') && b.includes('Doomed'))).toBe(false);
+    });
+
+    it('is bounded: past the cap the oldest request\'s items are dropped, with a warning', async () => {
+        const h = harness({ registerFails: true });
+        await render(h, ...Array.from({ length: 1_500 }, (_, i) => `First ${i}`));
+        at(1_000);
+        await render(h, ...Array.from({ length: 600 }, (_, i) => `Second ${i}`));
+        const dropped = vi.mocked(console.warn).mock.calls.map((c) => c.join(' ')).filter((m) => m.includes('Dropped'));
+        expect(dropped).toHaveLength(1);
+        expect(dropped[0]).toMatch(/Dropped 1500 unsent/);
+    });
+
+    it('CONTROL: a refused session keeps nothing — discarding what you may not write is correct', async () => {
+        const h = harness({ writeEnabled: false });
+        await render(h, 'Refused');
+        h.setCatalogWriteEnabled(true);
+        at(120_000);
+        await render(h, 'Later');
+        await settleDrain();
+        expect(posts(h).flat()).not.toContain('Refused');
+    });
+});
+
+describe('GATE-2 — an unknown write decision holds, never collapses to refused', () => {
+    const T0 = Date.UTC(2026, 0, 1);
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(T0);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('a phrase seen before authorization answers is sent once it resolves favourably', async () => {
+        const h = harness();
+        h.setAuthorizeFails(true);
+        await h.langsys.run({ locale: 'it' }, () => t('Early'));
+        await settleDrain();
+        expect(h.registerCalls(), 'nothing may go out while the decision is unknown').toBe(0);
+        h.setAuthorizeFails(false);
+        vi.setSystemTime(T0 + 60_000);
+        await h.langsys.run({ locale: 'it' }, () => t('Later'));
+        await settleDrain();
+        await settleDrain();
+        expect(h.registered.flat().map((i) => i.phrase)).toContain('Early');
+    });
+});
+
+describe('REG-13 — "unregistered" is decided only against a catalog that has loaded', () => {
+    /**
+     * Met by construction: `run()` awaits the catalog before the render starts, so no miss is
+     * decided while the first read is in flight. Proven with a first read slower than the drain
+     * that already holds the phrase — tier `n/a (pure)`, since a duplicate registration is
+     * invisible in the server's idempotent state.
+     */
+    it('a slow first catalog that already holds the phrase produces no registration', async () => {
+        const registered: unknown[] = [];
+        const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+            const href = String(url);
+            if (href.includes('authorize-project')) {
+                return new Response(JSON.stringify({ status: true, data: { key_type: 'write' } }), { status: 200 });
+            }
+            if (href.includes('translatable-items')) {
+                registered.push(...JSON.parse(String(init?.body)).translatable_items);
+                return new Response(JSON.stringify({ status: true }), { status: 200 });
+            }
+            await new Promise((r) => setTimeout(r, 150));
+            return new Response(JSON.stringify({ status: true, data: { __uncategorized__: { Known: 'Conosciuto' } } }), { status: 200 });
+        }) as unknown as typeof globalThis.fetch;
+        const langsys = createLangsysServer({ projectId: 'p', apiKey: 'k', baseLocale: 'en', fetch: fetchImpl });
+        const res = await langsys.run({ locale: 'it' }, () => t('Known'));
+        await settleDrain();
+        expect(res.value).toBe('Conosciuto');
+        expect(registered).toEqual([]);
     });
 });

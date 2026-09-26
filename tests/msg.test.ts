@@ -10,20 +10,34 @@ import {
     DEFAULT_SERVER_MESSAGE_CATEGORY,
 } from '../src/index.js';
 import * as pkg from '../src/index.js';
+import type { MessageInput } from '../src/index.js';
 
 /**
  * The MSG family on the server profile. The shared `server-message-vectors.json` is the core's,
- * vendored by blob `c8125549cfee0f5286f79a8cbc194cd30ccd446e` and read through the core's
- * checkout; its `render` rows are the client's (MSG-5) and are not rowed here.
+ * vendored by blob `7333e3919dac43af81c6c20bfdba974efd79725b` (core `239166a6`, measured against spec
+ * blob `5d7e6890`) and read through the core's checkout: twelve canonical entries from real framework
+ * messages, and resolve rows carrying each framework's native body with the entries attached. Its
+ * `render` rows are the client's (MSG-5) and are not rowed here.
  */
 const VECTORS = new URL('../node_modules/langsys-js-typescript/tests/fixtures/server-message-vectors.json', import.meta.url);
-const VECTORS_BLOB = 'c8125549cfee0f5286f79a8cbc194cd30ccd446e';
+const VECTORS_BLOB = '7333e3919dac43af81c6c20bfdba974efd79725b';
+const VECTORS_SPEC_BLOB = '5d7e6890b733a50fb6f5f5c30e0056c6ef7bcf45';
 const v = existsSync(VECTORS) ? JSON.parse(readFileSync(VECTORS, 'utf8')) : { markers: [], fill: [], resolve: [], canonical_entries: [] };
 
+interface ResolveRow {
+    id: string;
+    body: Record<string, unknown>;
+    options: { key: string; pieces?: Record<string, string> };
+    expected: Record<string, unknown>[];
+    body_unchanged?: boolean;
+}
+
 describe('server-message-vectors.json', () => {
-    it('is the blob this package is pinned to', () => {
+    it('is the blob this package is pinned to, measured against the spec blob this package rows against', () => {
         const raw = readFileSync(VECTORS);
         expect(createHash('sha1').update(`blob ${raw.length}\0`).update(raw).digest('hex')).toBe(VECTORS_BLOB);
+        expect(v.spec_blob).toContain(VECTORS_SPEC_BLOB);
+        expect([v.canonical_entries.length, v.markers.length, v.fill.length, v.resolve.length]).toEqual([12, 13, 10, 10]);
     });
     it.each(v.markers.map((r: { id: string }) => [r.id, r]))('markers: %s', (_id, r: { template: string; expected: string[] }) => {
         expect(templateMarkers(r.template)).toEqual(r.expected);
@@ -31,8 +45,49 @@ describe('server-message-vectors.json', () => {
     it.each(v.fill.map((r: { id: string }) => [r.id, r]))('fill: %s', (_id, r: { template: string; params: Record<string, unknown>; expected: string }) => {
         expect(fillTemplate(r.template, r.params)).toBe(r.expected);
     });
-    it.each(v.resolve.map((r: { id: string }) => [r.id, r]))('resolve: %s', (_id, r: { body: unknown; key?: string; expected: unknown[] }) => {
-        expect(resolveServerMessages(r.body, r.key ? { key: r.key } : {})).toEqual(r.expected);
+    it.each(v.resolve.map((r: ResolveRow) => [r.id, r]))('resolve: %s', (_id, r: ResolveRow) => {
+        const before = structuredClone(r.body);
+        expect(resolveServerMessages(r.body, r.options as never)).toEqual(r.expected);
+        expect(r.body).toEqual(before);
+    });
+});
+
+/**
+ * The same resolve rows, produced by THIS package rather than read from the file: the framework's
+ * native body with the attached member removed, each expected entry rebuilt through `message()` from
+ * its template, params, field and code, and attached through `attachMessages()` under the row's key
+ * and piece names. What comes back must equal the row's body, native members first and in their own
+ * order, and must resolve to its entries. The order of pieces inside an entry is not the wire's
+ * contract, and the rows themselves differ on it.
+ * Rows whose entries sit in a nested field map, or have no template to build from, are the
+ * resolver's alone.
+ */
+const attachable = (v.resolve as ResolveRow[]).filter((r) => {
+    if (r.options.key.includes('.') || !r.expected.length) return false;
+    const attached = r.body[r.options.key];
+    const templateName = r.options.pieces?.template ?? 'template';
+    return Array.isArray(attached) && attached.every((e) => typeof (e as Record<string, unknown>)[templateName] === 'string');
+});
+
+describe('server-message-vectors.json resolve rows, built by message() and attached by attachMessages()', () => {
+    it('covers the rows that carry an attached array of templated entries', () => {
+        expect(attachable.map((r) => r.id)).toEqual(['laravel-422-body', 'fastapi-422-body', 'rails-body-renamed-pieces', 'no-code-where-framework-has-none']);
+    });
+    it.each(attachable.map((r) => [r.id, r]))('%s', async (_id, r: ResolveRow) => {
+        const { langsys } = server();
+        const { [r.options.key]: _attached, ...native } = structuredClone(r.body);
+        const body = (
+            await langsys.run({ locale: 'es' }, () =>
+                langsys.attachMessages(
+                    native,
+                    r.expected.map((e) => langsys.message(e as unknown as MessageInput)),
+                    { key: r.options.key, ...(r.options.pieces ? { pieces: r.options.pieces } : {}) },
+                ),
+            )
+        ).value;
+        expect(body).toEqual(r.body);
+        expect(Object.keys(body)).toEqual(Object.keys(r.body));
+        expect(resolveServerMessages(body, r.options as never)).toEqual(r.expected);
     });
 });
 
@@ -68,14 +123,17 @@ afterEach(() => {
 });
 
 describe('MSG-1/MSG-4 — an entry is a template and its params; everything around it is the framework\'s', () => {
-    it('reproduces every canonical entry from its template and params', async () => {
+    it('reproduces every canonical entry from its template and params, field and code passed through', async () => {
+        // `framework` and `source` annotate the file and are not wire pieces.
+        const wire = v.canonical_entries.map(({ framework: _f, source: _s, ...e }: Record<string, unknown>) => e);
         const { langsys } = server();
         const built = await langsys.run({ locale: 'es' }, () =>
-            v.canonical_entries.map((e: { code: string; template: string; params?: Record<string, unknown>; field?: string }) =>
+            wire.map((e: { code: string; template: string; params?: Record<string, unknown>; field?: unknown }) =>
                 langsys.message({ code: e.code, template: e.template, params: e.params, field: e.field }),
             ),
         );
-        expect(built.value).toEqual(v.canonical_entries);
+        expect(built.value).toEqual(wire);
+        expect(built.value.filter((e) => Array.isArray(e.field)), 'a path-array field kept as the framework reports it').toHaveLength(2);
     });
 
     it('keeps a numeric param a number, and omits params when the template has no marker', async () => {
@@ -103,10 +161,10 @@ describe('MSG-1/MSG-4 — an entry is a template and its params; everything arou
         const { langsys } = server();
         const native = { message: 'The given data was invalid.', errors: { password: ['The password field must be at least 12 characters.'] } };
         const body = (await langsys.run({ locale: 'es' }, () => langsys.attachMessages(structuredClone(native), [langsys.message(entry)]))).value;
-        const { langsys_messages: attached, ...rest } = body as typeof native & { langsys_messages: unknown };
+        const { langsys_errors: attached, ...rest } = body as typeof native & { langsys_errors: unknown };
         expect(rest).toEqual(native);
         expect(attached).toEqual([{ ...entry, message: 'The password field must be at least 12 characters.' }]);
-        expect(resolveServerMessages(body, { key: 'langsys_messages' })).toEqual(attached);
+        expect(resolveServerMessages(body, { key: 'langsys_errors' })).toEqual(attached);
     });
 
     it('under a configured key, on a second framework\'s body shape', async () => {

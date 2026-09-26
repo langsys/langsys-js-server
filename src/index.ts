@@ -18,7 +18,14 @@ import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue
 import { createLogger } from './logger.js';
 import { RESOLVED_MARKER_ATTR, canonicalizeLocale, createLegacyKeys, type LegacyEntryPoint, type LegacyKeys } from 'langsys-js-typescript/pure';
 import { resolveRequestLocale, type ResolveLocaleOptions, type ResolvedLocale } from './locale.js';
-import { buildMessage, checkTemplate, DEFAULT_SERVER_MESSAGE_CATEGORY, type MessageInput, type ServerMessage } from './messages.js';
+import {
+    buildMessage,
+    checkTemplate,
+    DEFAULT_SERVER_MESSAGE_CATEGORY,
+    type MessageInput,
+    type ServerMessage,
+    type ServerMessagePieces,
+} from './messages.js';
 import type {
     Catalog,
     KeyType,
@@ -78,6 +85,7 @@ export {
     toServerMessage,
     type MessageInput,
     type ServerMessage,
+    type ServerMessagePieces,
 } from './messages.js';
 export type {
     Catalog,
@@ -548,15 +556,25 @@ export class LangsysServer {
 
     /**
      * Attach entries to the framework's own error body (MSG-1): the body is returned with every
-     * member it had, unchanged, and the entries added under `key` (default `langsys_messages`).
-     * Clients resolve them through the same key. This package introduces no envelope of its own.
+     * member it had, unchanged, and the entries added under `key` (default `langsys_errors`, the
+     * Laravel package's). `pieces` renames an entry's pieces for an app configured with names of its
+     * own (`{ template: 'sentence' }`). Clients resolve through the same key and piece names. This
+     * package introduces no envelope of its own.
      */
-    attachMessages<B extends Record<string, unknown>>(body: B, entries: ServerMessage[], options: { key?: string } = {}): B & Record<string, ServerMessage[]> {
-        const key = options.key ?? 'langsys_messages';
+    attachMessages<B extends Record<string, unknown>>(
+        body: B,
+        entries: ServerMessage[],
+        options: { key?: string; pieces?: ServerMessagePieces } = {},
+    ): B & Record<string, unknown[]> {
+        const key = options.key ?? 'langsys_errors';
         if (typeof body !== 'object' || body === null || Array.isArray(body)) {
             throw new TypeError('attachMessages needs the framework\'s error body as an object.');
         }
-        return { ...body, [key]: entries } as B & Record<string, ServerMessage[]>;
+        const pieces = options.pieces ?? {};
+        const named = entries.map((entry) =>
+            Object.fromEntries(Object.entries(entry).map(([piece, value]) => [pieces[piece as keyof ServerMessagePieces] ?? piece, value])),
+        );
+        return { ...body, [key]: named } as B & Record<string, unknown[]>;
     }
 
     /**

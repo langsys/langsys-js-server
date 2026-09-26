@@ -70,9 +70,10 @@ whose markup carries none of the listed constructs keep the ids they had.
   non-base render's root element; nothing for a base-locale render.
 - **Server messages** (MSG-1–MSG-4, MSG-6–MSG-8, MSG-11). `langsys.message()` builds an entry from
   the framework's own unfilled sentence and its params, passing the framework's field path and
-  failure identifier through, and registers the template after the response when the catalog lacks
-  it. `langsys.attachMessages()` adds the entries to the framework's own error body under a
-  configurable key. `checkTemplate()` refuses a validator's label placeholder, and
+  failure identifier through unchanged (a path array stays an array), and registers the template
+  after the response when the catalog lacks it. `langsys.attachMessages()` adds the entries to the
+  framework's own error body under a configurable key, default `langsys_errors`, with configurable
+  piece names. `checkTemplate()` refuses a validator's label placeholder, and
   `langsys.registerTemplates()` with its `langsys-messages` command lists and registers every
   declared template, reporting what it cannot and failing only under `--strict`. New option
   `messageCategory` (default `Errors`).

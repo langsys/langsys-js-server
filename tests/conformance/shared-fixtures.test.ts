@@ -44,17 +44,17 @@ const PHP_FIXTURE_BLOB = '633a09d9e1abd81bb1b77a7d861ff9328d734a48';
 
 /**
  * The core's, reached through the same `node_modules` symlink the walker-parity suite uses,
- * and pinned by blob: `34034931872b93e761faea49fb040f3fd8a6b9f5` (core `a639ae8c`), 32 rows measured
- * against spec blob `b9fd4b5b`. The blob, the spec blob and the row count are each asserted, and every row
+ * and pinned by blob: `ed6c35550518af5910e8cb8bd64ff2606e3904d2` (core `239166a6`), 32 rows measured
+ * against spec blob `5d7e6890`. The blob, the spec blob and the row count are each asserted, and every row
  * is asserted on its own.
  */
 const CORE_FIXTURE = new URL(
     '../../node_modules/langsys-js-typescript/tests/fixtures/canonicalization-reference.json',
     import.meta.url,
 );
-const CORE_FIXTURE_BLOB = '34034931872b93e761faea49fb040f3fd8a6b9f5';
+const CORE_FIXTURE_BLOB = 'ed6c35550518af5910e8cb8bd64ff2606e3904d2';
 /** The spec blob the core measured its rows against. */
-const CORE_FIXTURE_SPEC_BLOB = 'b9fd4b5b1c15f7ba29656d550dca1f06013327c0';
+const CORE_FIXTURE_SPEC_BLOB = '5d7e6890b733a50fb6f5f5c30e0056c6ef7bcf45';
 
 const phpPresent = existsSync(PHP_FIXTURE);
 const corePresent = existsSync(CORE_FIXTURE);

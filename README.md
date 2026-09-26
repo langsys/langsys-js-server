@@ -384,7 +384,8 @@ return json(langsys.attachMessages(frameworkErrorBody, [entry]), { status: 422 }
 ```
 
 `attachMessages` returns the framework's body unchanged apart from the entries, added under
-`langsys_messages` (or a `key` you choose); clients resolve them through the same key and render
+`langsys_errors` (or a `key` you choose, and piece names of your own through `pieces`); clients
+resolve them through the same configuration and render
 `t(template, 'Errors', params)`, falling back to `message`. A template the catalog does not list is
 registered the first time it is emitted. To register them ahead of time, list them in a module and
 run the build-time command; it reports any template it cannot register — one still holding a
@@ -499,7 +500,7 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `langsys.resolveLocale(request, options?)` | The request's locale. When the framework or app already chose one, pass it as `resolved`: it is mapped to the project's form (`es_ES` → `es-es`, a bare `es` → the project's default Spanish locale), validated, and served with no `Vary`. Otherwise the URL's first path segment or `?locale=`, then a `locale` cookie, then `Accept-Language`, each checked against the project's locales — or, before authorization answers, a seeded snapshot's. Returns `{ locale, source, vary }`; send `vary` in the response's `Vary` header. |
 | `langsys.resolvedRootAttributes(locale)` | `{ 'data-ls-resolved': locale }` for a render in a non-base locale, `{}` for the base locale. Spread onto the page's root element so a client SDK records no misses for text the server already translated. |
 | `langsys.message({ template, params?, field?, code? })` | A server message entry: `message` is the template filled, `params` present only when it has markers, `field` and `code` the framework's own, passed through. Inside `run()`, a template the catalog does not list is registered after the response, and a marker filled with a catalogued phrase warns once. |
-| `langsys.attachMessages(body, entries, { key? })` | The framework's own error body with the entries added under `key` (default `langsys_messages`), nothing else changed. |
+| `langsys.attachMessages(body, entries, { key?, pieces? })` | The framework's own error body with the entries added under `key` (default `langsys_errors`), nothing else changed. `pieces` renames an entry's pieces, for example `{ template: 'sentence', params: 'values' }`. |
 | `langsys.registerTemplates(templates, { register? })` | Check every declared template and, with `register`, register the ones the catalog does not list. Returns `{ templates, problems, registered }`. Also available as the `langsys-messages` command. |
 | `langsys.exportSnapshot(locales, categories?)` | A `langsys-catalog-snapshot` v1 document: each locale's catalog filtered by category, checksummed, in the format every Langsys SDK loads. Throws on a failed fetch. Also available as the `langsys-snapshot` command. |
 | `parseSnapshot(document)` | Load a snapshot (a JSON string or a parsed object): returns it, or throws a `SnapshotError` whose `reason` names why — `checksum` (an edited file), `format`, `version`, `missing-member`, `not-json`. The core's loader. |

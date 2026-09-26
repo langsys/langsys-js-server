@@ -17,11 +17,12 @@ export {
     templateMarkers,
     toServerMessage,
 } from 'langsys-js-typescript/pure';
+export type { ServerMessagePieces } from 'langsys-js-typescript/pure';
 
 /** One server message entry (MSG-1). */
 export interface ServerMessage {
-    /** The failing field, in the framework's own path format, when the framework reports one. */
-    field?: string;
+    /** The failing field, in the framework's own path format (a dotted string, a path array), unchanged. */
+    field?: unknown;
     /** The framework's own identifier for the failure, passed through; never used to choose text. */
     code?: string;
     /** The template filled with its params. */
@@ -36,7 +37,7 @@ export interface MessageInput {
     code?: string;
     template: string;
     params?: Record<string, unknown>;
-    field?: string;
+    field?: unknown;
 }
 
 /**
@@ -63,10 +64,10 @@ export function checkTemplate(template: string): string | null {
 export function buildMessage(input: MessageInput): ServerMessage {
     const hasMarkers = templateMarkers(input.template).length > 0;
     return {
-        ...(typeof input.field === 'string' && input.field !== '' ? { field: input.field } : {}),
+        ...(input.field !== undefined && input.field !== null && input.field !== '' ? { field: input.field } : {}),
         ...(typeof input.code === 'string' && input.code !== '' ? { code: input.code } : {}),
-        message: fillTemplate(input.template, input.params ?? {}),
         template: input.template,
         ...(hasMarkers && input.params ? { params: input.params } : {}),
+        message: fillTemplate(input.template, input.params ?? {}),
     };
 }

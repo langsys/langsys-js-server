@@ -110,6 +110,18 @@ export class CatalogStore {
      */
     private readonly failureWindows = new Map<string, { failures: number; until: number }>();
 
+    /**
+     * SNAP-2: a seeded snapshot, locale → catalog. Read only while this store holds no live catalog
+     * for the locale, and answered as NOT a live answer (`ok: false`), because registration is
+     * decided only against the live catalog (REG-13). The live fetch starts in the background, so
+     * the render does not wait on it, and outranks the seed once it lands.
+     */
+    private seed: Record<string, Catalog> = {};
+
+    seedFrom(catalogs: Record<string, Catalog>): void {
+        this.seed = Object.fromEntries(Object.entries(catalogs).map(([locale, c]) => [canonicalizeLocale(locale), normalizeCatalog(c)]));
+    }
+
     constructor(
         private readonly api: LangsysApi,
         private readonly logger: Logger,
@@ -205,6 +217,15 @@ export class CatalogStore {
         }
 
         const window = this.failureWindows.get(key);
+        const seeded = this.seed[canonicalizeLocale(locale)];
+        if (seeded) {
+            if (!(window && now < window.until) && !this.inFlight.has(key)) {
+                void this.startFetch(locale, key).catch(() => {
+                    // Logged inside; a background refresh must never reject unhandled.
+                });
+            }
+            return { catalog: cloneCatalog(seeded), ok: false };
+        }
         if (window && now < window.until) return { catalog: {}, ok: false };
 
         // Single-flight: coalesce concurrent misses for the same key.
@@ -214,6 +235,12 @@ export class CatalogStore {
             return { catalog: cloneCatalog(settled.catalog), ok: settled.ok };
         }
 
+        const settled = await this.startFetch(locale, key);
+        return { catalog: cloneCatalog(settled.catalog), ok: settled.ok };
+    }
+
+    /** Start the single-flight fetch for a key and record its outcome in the failure window. */
+    private startFetch(locale: string, key: string): Promise<CatalogResult> {
         // Stamp the generation this fetch started in. `invalidate()` bumps it, so a fetch
         // already on the wire when an invalidation lands is not allowed to write its
         // now-stale result back into the cache. Without this the explicit invalidation is
@@ -238,8 +265,7 @@ export class CatalogStore {
             .finally(() => this.inFlight.delete(key));
 
         this.inFlight.set(key, promise);
-        const settled = await promise;
-        return { catalog: cloneCatalog(settled.catalog), ok: settled.ok };
+        return promise;
     }
 
     private async fetchAndStore(locale: string, key: string, generation: number): Promise<CatalogResult> {

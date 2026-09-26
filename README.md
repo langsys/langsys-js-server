@@ -365,27 +365,31 @@ the migration is done, and `t()` does no key lookup at all.
 
 ## Server messages
 
-Validation errors and system messages never appear on a page a visitor or the discovery renderer
-sees before a user triggers them, so they cannot be discovered by rendering. The server registers
-them instead. Each is a whole source sentence with every translatable value written in — `The
-password is required.` and `The name is required.` are two templates — and `{name}` markers only
-for numbers, dates and raw input:
+Validation errors never appear on a page before a user triggers them, so they cannot be discovered
+by rendering; the server registers them. What translation needs from a failure is its
+**template** — the framework's own sentence before its values are filled, with the field's label
+written in (`The password field must be at least {min} characters.`), each non-translatable value
+a `{name}` marker — and the **params** that fill it. Everything else stays the framework's: its
+error body, its field paths, and its own identifier for the failure as `code`.
 
 ```ts
 const entry = langsys.message({
     field: 'password',
-    code: 'too_short',
-    template: 'The password must be at least {min} characters.',
+    code: 'minLength', // the framework's own identifier, passed through; omit it when there is none
+    template: 'The password field must be at least {min} characters.',
     params: { min: 12 },
 });
-// { field: 'password', code: 'too_short', message: 'The password must be at least 12 characters.',
-//   template: 'The password must be at least {min} characters.', params: { min: 12 } }
-return json(langsys.errorBody([entry]), { status: 422 });
+// entry.message === 'The password field must be at least 12 characters.'
+return json(langsys.attachMessages(frameworkErrorBody, [entry]), { status: 422 });
 ```
 
-Clients branch on `code` and render `t(template, 'Errors', params)`, falling back to `message`.
-To register every template before a user ever sees one, list them in a module and run the
-build-time command, which exits non-zero naming any template that breaks the rules:
+`attachMessages` returns the framework's body unchanged apart from the entries, added under
+`langsys_messages` (or a `key` you choose); clients resolve them through the same key and render
+`t(template, 'Errors', params)`, falling back to `message`. A template the catalog does not list is
+registered the first time it is emitted. To register them ahead of time, list them in a module and
+run the build-time command; it reports any template it cannot register — one still holding a
+validator's label placeholder such as `$property`, `${path}` or `{{#label}}` — and exits non-zero
+for that only with `--strict`:
 
 ```sh
 LANGSYS_PROJECT_ID=… LANGSYS_API_KEY=<write key> npx langsys-messages ./messages.mjs --register
@@ -402,7 +406,8 @@ LANGSYS_PROJECT_ID=… LANGSYS_API_KEY=… npx langsys-snapshot --locale it --lo
 
 The file is a `langsys-catalog-snapshot` v1 document, the format every Langsys SDK writes and
 loads. A snapshot is a cache of the catalog, not a source: it is refreshed by exporting again,
-never by editing, and its checksum makes an edited file fail to load.
+never by editing, and its checksum makes an edited file fail to load. A server seeds from one with
+the `snapshot` option; the live catalog takes over as soon as it has been fetched.
 
 ## How this package is verified
 
@@ -479,6 +484,7 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `flushOnExit` | `boolean` | `true` | Best-effort send of held phrases when the process exits (`beforeExit`, SIGTERM, SIGINT). Not a guarantee: call `flush(result)` where losing a phrase matters |
 | `messageCategory` | `string` | `'Errors'` | The category server message templates are registered and looked up under. Clients rendering the messages must use the same one |
 | `legacyKeys` | `LegacyKeyFile[]` | — | Turn on the legacy-key migration mode: your kept source-language files (`i18next`, `vue-i18n` or `plain` JSON). `t()` then resolves its argument as a key first. See "Migrating from i18n keys" |
+| `snapshot` | snapshot document or JSON | — | Seed the catalog from a `langsys-catalog-snapshot`: renders read it with no fetch in front of them until the live catalog for a locale arrives, and `resolveLocale` serves its locales while authorization is unavailable. Nothing is registered against it. Refused at startup if invalid |
 | `fetch` | `typeof fetch` | global | Inject a fetch implementation (tests, proxies, edge runtimes) |
 
 ### Exports
@@ -490,16 +496,16 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 | `langsys.run(options, fn)` | Run `fn` with a request-scoped translation context. Returns `{ value, catalog, locale, missing }`. |
 | `langsys.preloadCatalog(locale)` | Resolve a catalog without rendering — for hosts that must publish it to the client *before* the render reads it. |
 | `langsys.flush(result)` | Drain the miss queue now, returning the promise. For `ctx.waitUntil`. Safe alongside the drain `run()` schedules. |
-| `langsys.resolveLocale(request, options?)` | Choose a request's locale from a Fetch `Request`: the URL's first path segment or `?locale=`, then a `locale` cookie, then `Accept-Language`, each checked against the project's base and target locales. Returns `{ locale, source, vary }`; send `vary` in the response's `Vary` header. Options rename the query parameter and cookie or turn either source off. |
+| `langsys.resolveLocale(request, options?)` | The request's locale. When the framework or app already chose one, pass it as `resolved`: it is mapped to the project's form (`es_ES` → `es-es`, a bare `es` → the project's default Spanish locale), validated, and served with no `Vary`. Otherwise the URL's first path segment or `?locale=`, then a `locale` cookie, then `Accept-Language`, each checked against the project's locales — or, before authorization answers, a seeded snapshot's. Returns `{ locale, source, vary }`; send `vary` in the response's `Vary` header. |
 | `langsys.resolvedRootAttributes(locale)` | `{ 'data-ls-resolved': locale }` for a render in a non-base locale, `{}` for the base locale. Spread onto the page's root element so a client SDK records no misses for text the server already translated. |
-| `langsys.message({ code, template, params?, field? })` | A server message entry `{ field?, code, message, template, params? }`: `message` is the template filled, `params` only when it has markers. Inside `run()`, a template the catalog does not list is registered after the response, and a marker filled with a catalogued phrase warns once. |
-| `langsys.errorBody(entries, top?)` | The default error envelope, `{ status: false, error: { ...top, errors } }`, with `validation_failed` as the default top entry. Optional: clients find entries wherever an app's own error body puts them. |
+| `langsys.message({ template, params?, field?, code? })` | A server message entry: `message` is the template filled, `params` present only when it has markers, `field` and `code` the framework's own, passed through. Inside `run()`, a template the catalog does not list is registered after the response, and a marker filled with a catalogued phrase warns once. |
+| `langsys.attachMessages(body, entries, { key? })` | The framework's own error body with the entries added under `key` (default `langsys_messages`), nothing else changed. |
 | `langsys.registerTemplates(templates, { register? })` | Check every declared template and, with `register`, register the ones the catalog does not list. Returns `{ templates, problems, registered }`. Also available as the `langsys-messages` command. |
 | `langsys.exportSnapshot(locales, categories?)` | A `langsys-catalog-snapshot` v1 document: each locale's catalog filtered by category, checksummed, in the format every Langsys SDK loads. Throws on a failed fetch. Also available as the `langsys-snapshot` command. |
 | `parseSnapshot(document)` | Load a snapshot (a JSON string or a parsed object): returns it, or throws a `SnapshotError` whose `reason` names why — `checksum` (an edited file), `format`, `version`, `missing-member`, `not-json`. The core's loader. |
 | `langsys.bridge('i18next')`, `langsys.bridge('vue-i18n')` | A `t()` whose literal misses convert from that library's syntax, for call sites that still use it. |
 | `readLegacyKeyFiles([{ path, format?, namespace? }])` | Read the legacy-key mode's JSON files from disk (Node, Deno, Bun). |
-| `checkTemplate(template)` | Why a template may not be declared — a label marker such as `{field}`, or a framework placeholder such as `:attribute` — or `null`. |
+| `checkTemplate(template)` | Why a template may not be declared — a validator's label placeholder still in it (class-validator `$property`, yup `${path}`/`${label}`, joi `{{#label}}`/`{{#key}}`) — or `null`. |
 | `fillTemplate`, `templateMarkers`, `resolveServerMessages` | The shared marker grammar, filling, and finding entries in a response body. |
 | `langsys.invalidate(locale)` | Drop a locale's cached catalog across every worker sharing the cache. |
 | `t(phrase, category?, params?)` | Translate. Ambient inside `run()`. |

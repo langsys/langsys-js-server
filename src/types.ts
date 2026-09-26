@@ -65,6 +65,14 @@ export interface LangsysServerConfig {
      * when absent, and then `t()` does no key lookup at all.
      */
     legacyKeys?: import('langsys-js-typescript/pure').LegacyKeyFile[];
+    /**
+     * A catalog snapshot to seed from (SNAP-2): a `langsys-catalog-snapshot` document, parsed or as
+     * its JSON text. Lookups read it until the live catalog for a locale has been fetched, and it
+     * supplies the locales `resolveLocale` serves while authorization is unavailable. Refused at
+     * construction, with a `SnapshotError` naming why, if it is not a valid snapshot. Whether and
+     * when to seed is the app's or the binding's decision.
+     */
+    snapshot?: unknown;
     fetch?: typeof globalThis.fetch;
 }
 

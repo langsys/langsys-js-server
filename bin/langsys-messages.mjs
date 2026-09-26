@@ -2,13 +2,14 @@
 /**
  * List, check and register every server message template an app declares (spec MSG-7).
  *
- *   langsys-messages <declarations module> [--register]
+ *   langsys-messages <declarations module> [--register] [--strict]
  *
  * The module's default export (or its `templates` export) is an array of templates, each a string
  * or `{ template, where }`, where `where` names the file, class or field it came from. Every
  * template is printed; a template that breaks the template rules is printed with where it came
- * from and the fix, and makes the command exit 1 — so a message that cannot be registered ahead
- * of time fails the build instead of reaching a user untranslated. With --register, templates
+ * from and the fix. That is a report, not an error, because a message the command cannot list is
+ * registered the first time it is emitted; with --strict it exits 1, for a team that wants no
+ * message shown untranslated even once. With --register, templates
  * the project's catalog does not already list are registered; a second run registers nothing.
  *
  * Configuration comes from LANGSYS_PROJECT_ID, LANGSYS_API_KEY, LANGSYS_BASE_LOCALE (default en),
@@ -20,9 +21,10 @@ import { createLangsysServer } from '../dist/index.mjs';
 
 const args = process.argv.slice(2);
 const register = args.includes('--register');
+const strict = args.includes('--strict');
 const target = args.find((a) => !a.startsWith('--'));
 if (!target) {
-    console.error('usage: langsys-messages <declarations module> [--register]');
+    console.error('usage: langsys-messages <declarations module> [--register] [--strict]');
     process.exit(2);
 }
 
@@ -52,4 +54,4 @@ const { templates, problems, registered } = await langsys.registerTemplates(decl
 for (const t of templates) console.log(t);
 for (const p of problems) console.error(`PROBLEM ${p.where ? `${p.where}: ` : ''}${p.template ? JSON.stringify(p.template) : ''} — ${p.problem}`);
 console.log(`${templates.length} template(s), ${problems.length} problem(s)${register ? `, ${registered.length} registered under ${langsys.messageCategory}` : ''}`);
-process.exit(problems.length ? 1 : 0);
+process.exit(strict && problems.length ? 1 : 0);

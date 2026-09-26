@@ -22,9 +22,9 @@ afterAll(async () => {
     await double.stop();
 });
 
-function run(module: string, register: boolean): Promise<{ code: number | null; out: string; err: string }> {
+function run(module: string, register: boolean, strict = false): Promise<{ code: number | null; out: string; err: string }> {
     return new Promise((resolve) => {
-        const child = spawn(process.execPath, [BIN, module, ...(register ? ['--register'] : [])], {
+        const child = spawn(process.execPath, [BIN, module, ...(register ? ['--register'] : []), ...(strict ? ['--strict'] : [])], {
             env: { ...process.env, LANGSYS_PROJECT_ID: 'p', LANGSYS_API_KEY: 'wk', LANGSYS_BASE_LOCALE: 'en', LANGSYS_API_URL: double.baseUrl },
         });
         let out = '';
@@ -57,12 +57,19 @@ describe.skipIf(!existsSync(DIST))('MSG-7 — the build-time command', { timeout
         expect(r.out).toContain('0 registered');
     });
 
-    it('a template breaking the rules exits non-zero, naming where it came from and the fix', async () => {
+    it('a template it cannot register is reported with where it came from and the fix, and the command still succeeds', async () => {
         await double.seed(seedDoc());
         const r = await run(BAD, true);
+        expect(r.code, 'reporting is not an error: MSG-8 registers the message when first emitted').toBe(0);
+        expect(r.err).toMatch(/PROBLEM app\/validators\/signup\.ts: "\$property must be an email" — \$property is a label placeholder/);
+        expect(await accepted(), 'the refused template is not registered').toEqual(['Errors|The password is required.']);
+    });
+
+    it('under --strict, the same report exits non-zero', async () => {
+        await double.seed(seedDoc());
+        const r = await run(BAD, true, true);
         expect(r.code).toBe(1);
-        expect(r.err).toMatch(/PROBLEM app\/Rules\/Legacy\.php: "The :attribute field is required\." — :attribute is a framework placeholder; write the value into the sentence/);
-        expect(await accepted(), 'the refused template must not be registered').toEqual(['Errors|The password is required.']);
+        expect(r.err).toMatch(/PROBLEM/);
     });
 
     it('CONTROL: without --register it lists and checks, and registers nothing', async () => {

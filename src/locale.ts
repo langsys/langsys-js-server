@@ -12,6 +12,12 @@
 import { canonicalizeLocale } from 'langsys-js-typescript/pure';
 
 export interface ResolveLocaleOptions {
+    /**
+     * The locale the framework or the app already resolved for this request — Express's
+     * `req.language`, a middleware's choice. When given it is the one served (mapped to the
+     * project's form and validated, falling back to the base) and nothing else is consulted.
+     */
+    resolved?: string;
     /** The query parameter the app routes by, or `false`. Default `locale`. */
     queryParam?: string | false;
     /** The cookie the app keeps the locale in, or `false`. Default `locale`. */
@@ -23,7 +29,7 @@ export interface ResolveLocaleOptions {
 export interface ResolvedLocale {
     /** Canonical lowercase `xx` or `xx-yy`, always one the project serves. */
     locale: string;
-    source: 'url' | 'cookie' | 'header' | 'base';
+    source: 'framework' | 'url' | 'cookie' | 'header' | 'base';
     /** Header names the response must list in `Vary`. */
     vary: string[];
 }
@@ -79,8 +85,24 @@ export function resolveRequestLocale(
     served: readonly string[],
     baseLocale: string,
     options: ResolveLocaleOptions = {},
+    defaultLocales: Record<string, string> = {},
 ): ResolvedLocale {
     const { queryParam = 'locale', cookie = 'locale', pathSegment = true } = options;
+
+    // The framework already decided: serve that, mapped to the project's form. A bare language is
+    // the project's default locale for it. The framework's choice is the framework's to vary on,
+    // so nothing is added to Vary; an unsupported one is served as the base.
+    if (options.resolved !== undefined) {
+        let wanted = '';
+        try {
+            wanted = canonicalizeLocale(options.resolved.trim());
+        } catch {
+            wanted = '';
+        }
+        const mapped = served.includes(wanted) ? wanted : defaultLocales[wanted];
+        const locale = mapped && served.includes(mapped) ? mapped : canonicalizeLocale(baseLocale);
+        return { locale, source: 'framework', vary: [] };
+    }
     const url = new URL(request.url);
 
     const fromUrl =

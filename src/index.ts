@@ -13,7 +13,7 @@
 import { LangsysApi, DEFAULT_API_URL } from './api.js';
 import { CatalogStore, DEFAULT_TTL_SECONDS, normalizeCatalog } from './catalog.js';
 import { getScope, runInScope, type RequestScope } from './context.js';
-import { buildSnapshot, type CatalogSnapshot, type SnapshotCategory } from './snapshot.js';
+import { buildSnapshot, parseSnapshot, type CatalogSnapshot, type SnapshotCategory } from './snapshot.js';
 import { DEFAULT_BATCH_LIMIT, RegistrationBackoff, RetainedQueue, drainMissQueue, queueMiss, scheduleDrain } from './harvest.js';
 import { createLogger } from './logger.js';
 import { RESOLVED_MARKER_ATTR, canonicalizeLocale, createLegacyKeys, type LegacyEntryPoint, type LegacyKeys } from 'langsys-js-typescript/pure';
@@ -71,7 +71,6 @@ export {
 } from './snapshot.js';
 export {
     DEFAULT_SERVER_MESSAGE_CATEGORY,
-    SERVER_MESSAGE_CODES,
     checkTemplate,
     fillTemplate,
     resolveServerMessages,
@@ -229,6 +228,10 @@ export class LangsysServer {
      * of the project, identical for every request, like the key type.
      */
     private servedLocales: string[] | undefined;
+    /** Language → default locale, from authorization, for a bare framework locale (SRV-6). */
+    private defaultLocales: Record<string, string> = {};
+    /** The seeded snapshot (SNAP-2), parsed and verified at construction; undefined when none. */
+    private readonly snapshot: CatalogSnapshot | undefined;
     /** The category server message templates live under (MSG-6). */
     readonly messageCategory: string;
     /**
@@ -253,6 +256,8 @@ export class LangsysServer {
         // MIG-1/MIG-7: built only when configured, and a file in a format this core does not read
         // is refused here, at load, naming the format and the file — before anything resolves.
         this.legacyKeys = config.legacyKeys?.length ? createLegacyKeys(config.legacyKeys) : undefined;
+        // SNAP-2: verified here, so a bad snapshot is refused at startup, naming why.
+        this.snapshot = config.snapshot === undefined ? undefined : parseSnapshot(config.snapshot as string);
         this.logger = createLogger(config.debug ?? false);
         this.api = new LangsysApi(
             config.projectId,
@@ -271,6 +276,7 @@ export class LangsysServer {
                 this.writeEnabled = writeEnabled;
             },
         );
+        if (this.snapshot) this.catalogs.seedFrom(this.snapshot.catalog as Record<string, Catalog>);
         this.retained = new RetainedQueue(
             async (scope, force) => {
                 // A request held on an unknown decision (GATE-2) re-reads it: authorization may
@@ -339,7 +345,7 @@ export class LangsysServer {
 
         this.authorizing ??= this.api
             .authorize()
-            .then(({ status, keyType, writeEnabled, batchLimit, locales }) => {
+            .then(({ status, keyType, writeEnabled, batchLimit, locales, defaultLocales }) => {
                 if (!status) {
                     this.logger.error(
                         'Project authorization failed. Catalogs will not load and the page will ' +
@@ -352,6 +358,7 @@ export class LangsysServer {
                 this.writeEnabled = writeEnabled;
                 if (batchLimit !== undefined) this.batchLimit = batchLimit;
                 if (locales?.length) this.servedLocales = locales;
+                if (Object.keys(defaultLocales).length) this.defaultLocales = defaultLocales;
                 if (keyType === 'unknown') {
                     this.logger.warn(
                         'Project authorization succeeded but returned no recognisable key type. ' +
@@ -483,7 +490,12 @@ export class LangsysServer {
      */
     async resolveLocale(request: Request, options: ResolveLocaleOptions = {}): Promise<ResolvedLocale> {
         await this.ensureAuthorized();
-        return resolveRequestLocale(request, this.servedLocales ?? [this.baseLocale], this.baseLocale, options);
+        // SRV-6: authorization's answer when it has one; until then a seeded snapshot's base and
+        // locales, and without either only the configured base.
+        if (this.servedLocales) return resolveRequestLocale(request, this.servedLocales, this.baseLocale, options, this.defaultLocales);
+        const base = this.snapshot?.base_locale ?? this.baseLocale;
+        const served = this.snapshot ? [...new Set([this.snapshot.base_locale, ...this.snapshot.locales])] : [this.baseLocale];
+        return resolveRequestLocale(request, served, base, options, this.defaultLocales);
     }
 
     /**
@@ -535,13 +547,16 @@ export class LangsysServer {
     }
 
     /**
-     * The default error envelope (MSG-1): `{ status: false, error: { ...top, errors } }`, where the
-     * top entry defaults to `validation_failed`. An app with its own error body keeps it; clients
-     * resolve entries wherever they sit.
+     * Attach entries to the framework's own error body (MSG-1): the body is returned with every
+     * member it had, unchanged, and the entries added under `key` (default `langsys_messages`).
+     * Clients resolve them through the same key. This package introduces no envelope of its own.
      */
-    errorBody(errors: ServerMessage[], top?: MessageInput): { status: false; error: ServerMessage & { errors: ServerMessage[] } } {
-        const head = this.message(top ?? { code: 'validation_failed', template: 'The request failed validation.' });
-        return { status: false, error: { ...head, errors } };
+    attachMessages<B extends Record<string, unknown>>(body: B, entries: ServerMessage[], options: { key?: string } = {}): B & Record<string, ServerMessage[]> {
+        const key = options.key ?? 'langsys_messages';
+        if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+            throw new TypeError('attachMessages needs the framework\'s error body as an object.');
+        }
+        return { ...body, [key]: entries } as B & Record<string, ServerMessage[]>;
     }
 
     /**

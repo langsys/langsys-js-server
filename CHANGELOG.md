@@ -62,16 +62,23 @@ whose markup carries none of the listed constructs keep the ids they had.
 
 ### Added
 
-- **`langsys.resolveLocale(request)`** (SRV-6). Picks the locale from the URL, then a cookie,
-  then `Accept-Language`, validated against the project's served locales from authorization,
-  and returns the `Vary` headers the choice depended on.
+- **`langsys.resolveLocale(request)`** (SRV-6). Serves a locale the framework already resolved,
+  passed as `resolved`, mapped to the project's form and validated; otherwise picks it from the URL,
+  then a cookie, then `Accept-Language`, validated against the project's served locales, and
+  returns the `Vary` headers the choice depended on.
 - **`langsys.resolvedRootAttributes(locale)`** (GATE-10). The `data-ls-resolved` marker for a
   non-base render's root element; nothing for a base-locale render.
-- **Server messages** (MSG-1–MSG-4, MSG-6–MSG-8, MSG-11). `langsys.message()` builds an entry and
-  registers its template after the response when the catalog lacks it; `langsys.errorBody()` is the
-  default envelope; `checkTemplate()` refuses label markers and framework placeholders; and
-  `langsys.registerTemplates()` with its `langsys-messages` command lists, checks and registers every
-  declared template, exiting non-zero on a problem. New option `messageCategory` (default `Errors`).
+- **Server messages** (MSG-1–MSG-4, MSG-6–MSG-8, MSG-11). `langsys.message()` builds an entry from
+  the framework's own unfilled sentence and its params, passing the framework's field path and
+  failure identifier through, and registers the template after the response when the catalog lacks
+  it. `langsys.attachMessages()` adds the entries to the framework's own error body under a
+  configurable key. `checkTemplate()` refuses a validator's label placeholder, and
+  `langsys.registerTemplates()` with its `langsys-messages` command lists and registers every
+  declared template, reporting what it cannot and failing only under `--strict`. New option
+  `messageCategory` (default `Errors`).
+- **Seeding from a snapshot** (SNAP-2). The `snapshot` option serves renders from a snapshot until
+  the live catalog arrives, never registers against it, and supplies the locales `resolveLocale`
+  serves while authorization is unavailable.
 - **`hostAttributes` on every rendered block** (MARK-1). `renderTranslateBlock()` returns the
   `data-ls-contentblock` attribute carrying the id the block resolved under, for the adapter to
   spread onto the host element.

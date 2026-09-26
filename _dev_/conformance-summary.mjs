@@ -40,7 +40,7 @@ const fail = (lines) => {
  * whenever the two revisions happen to share ids, which is most of the time and exactly
  * when nobody looks.
  */
-const PINNED_SPEC_BLOB = 'b9fd4b5b1c15f7ba29656d550dca1f06013327c0';
+const PINNED_SPEC_BLOB = '5d7e6890b733a50fb6f5f5c30e0056c6ef7bcf45';
 const header = text.match(/^\|\s*\*\*Spec revision read\*\*\s*\|([^\n]*)$/m);
 if (!header || !header[1].includes(`blob ${PINNED_SPEC_BLOB}`)) {
     fail(`The "Spec revision read" header does not cite blob ${PINNED_SPEC_BLOB}, which is the revision this script's id list was extracted from. Move both together.`);

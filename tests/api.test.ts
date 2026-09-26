@@ -172,27 +172,27 @@ describe('non-200 responses', () => {
 describe('authorize()', () => {
     it('reports a write key', async () => {
         const { api } = makeApi(() => ok({ status: true, data: { key_type: 'write' } }));
-        expect(await api.authorize()).toEqual({ status: true, keyType: 'write' });
+        expect(await api.authorize()).toEqual({ status: true, keyType: 'write', defaultLocales: {} });
     });
 
     it('reports a read key', async () => {
         const { api } = makeApi(() => ok({ status: true, data: { key_type: 'read' } }));
-        expect(await api.authorize()).toEqual({ status: true, keyType: 'read' });
+        expect(await api.authorize()).toEqual({ status: true, keyType: 'read', defaultLocales: {} });
     });
 
     it('maps an unrecognised key_type to unknown rather than trusting it', async () => {
         const { api } = makeApi(() => ok({ status: true, data: { key_type: 'admin' } }));
-        expect(await api.authorize()).toEqual({ status: true, keyType: 'unknown' });
+        expect(await api.authorize()).toEqual({ status: true, keyType: 'unknown', defaultLocales: {} });
     });
 
     it('maps a missing key_type to unknown', async () => {
         const { api } = makeApi(() => ok({ status: true, data: {} }));
-        expect(await api.authorize()).toEqual({ status: true, keyType: 'unknown' });
+        expect(await api.authorize()).toEqual({ status: true, keyType: 'unknown', defaultLocales: {} });
     });
 
     it('reports failure without inventing a key type', async () => {
         const { api } = makeApi(() => new Response('nope', { status: 403 }));
-        expect(await api.authorize()).toEqual({ status: false, keyType: 'unknown' });
+        expect(await api.authorize()).toEqual({ status: false, keyType: 'unknown', defaultLocales: {} });
     });
 });
 

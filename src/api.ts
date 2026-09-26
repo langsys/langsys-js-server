@@ -70,6 +70,21 @@ export function readWriteEnabled(source: unknown): boolean | undefined {
  * route to the default rather than being coerced into one. Floored rather than rejected
  * for a fractional value, because `5.5` still means the server will refuse at 6.
  */
+/** `default_locales` from an authorize payload, keys and values canonical; anything malformed dropped. */
+function readDefaultLocales(raw: unknown): Record<string, string> {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+    const out: Record<string, string> = {};
+    for (const [language, locale] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof locale !== 'string') continue;
+        try {
+            out[canonicalizeLocale(language)] = canonicalizeLocale(locale);
+        } catch {
+            // An unparseable entry is not a default.
+        }
+    }
+    return out;
+}
+
 /** The project's served locales from an authorize payload: its base, then its targets. */
 function readLocales(data: { base_locale?: unknown; target_locales?: unknown } | undefined): string[] | undefined {
     if (!data || typeof data.base_locale !== 'string') return undefined;
@@ -107,6 +122,8 @@ export interface AuthorizeResult {
     batchLimit: number | undefined;
     /** The project's base and target locales, canonical; `undefined` when not advertised. */
     locales: string[] | undefined;
+    /** Language → the project's default locale for it (`es` → `es-es`), canonical; empty when not advertised. */
+    defaultLocales: Record<string, string>;
 }
 
 export interface TranslatableItem {
@@ -158,7 +175,7 @@ export class LangsysApi {
      */
     async authorize(): Promise<AuthorizeResult> {
         const res = await this.get(`authorize-project/${this.projectId}`);
-        const data = res.data as { key_type?: string; base_locale?: unknown; target_locales?: unknown } | undefined;
+        const data = res.data as { key_type?: string; base_locale?: unknown; target_locales?: unknown; default_locales?: unknown } | undefined;
         const raw = data?.key_type;
         const keyType: KeyType =
             raw === 'write' || raw === 'read' || raw === 'ip_write' ? raw : 'unknown';
@@ -168,6 +185,7 @@ export class LangsysApi {
             writeEnabled: readWriteEnabled(data),
             batchLimit: readBatchLimit(data),
             locales: readLocales(data),
+            defaultLocales: readDefaultLocales(data?.default_locales),
         };
     }
 

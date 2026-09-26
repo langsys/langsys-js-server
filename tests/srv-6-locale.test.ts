@@ -17,7 +17,7 @@ const server = () =>
             new Response(
                 JSON.stringify(
                     String(url).includes('authorize-project')
-                        ? { status: true, data: { key_type: 'read', base_locale: 'en', target_locales: ['it', 'de-DE'] } }
+                        ? { status: true, data: { key_type: 'read', base_locale: 'en', target_locales: ['it', 'de-DE', 'es-es'], default_locales: { it: 'it', de: 'de-de', es: 'es-es' } } }
                         : { status: true, data: {} },
                 ),
                 { status: 200, headers: { 'content-type': 'application/json' } },
@@ -25,6 +25,23 @@ const server = () =>
     });
 
 const req = (path: string, headers: Record<string, string> = {}) => new Request(`https://shop.example${path}`, { headers });
+
+describe('SRV-6 — a locale the framework already resolved is the one served', () => {
+    it('es-ES from the framework is served as es-es, whatever URL, cookie and header say, with no Vary', async () => {
+        const r = await server().resolveLocale(req('/it/pricing?locale=de', { cookie: 'locale=it', 'accept-language': 'de' }), { resolved: 'es-ES' });
+        expect(r).toEqual({ locale: 'es-es', source: 'framework', vary: [] });
+    });
+    it('underscore form too: es_ES', async () => {
+        expect((await server().resolveLocale(req('/'), { resolved: 'es_ES' })).locale).toBe('es-es');
+    });
+    it('a bare language is the project\'s default locale for it, from authorization', async () => {
+        expect((await server().resolveLocale(req('/'), { resolved: 'es' })).locale).toBe('es-es');
+        expect((await server().resolveLocale(req('/'), { resolved: 'de' })).locale).toBe('de-de');
+    });
+    it('an unsupported framework locale is served as the base, still with no Vary', async () => {
+        expect(await server().resolveLocale(req('/it', { 'accept-language': 'it' }), { resolved: 'ja-JP' })).toEqual({ locale: 'en', source: 'framework', vary: [] });
+    });
+});
 
 describe('SRV-6 — one URL, four requests', () => {
     it('a URL locale beats a conflicting cookie and header, and adds no Vary', async () => {

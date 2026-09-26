@@ -8,8 +8,8 @@ import {
     resolveServerMessages,
     templateMarkers,
     DEFAULT_SERVER_MESSAGE_CATEGORY,
-    SERVER_MESSAGE_CODES,
 } from '../src/index.js';
+import * as pkg from '../src/index.js';
 
 /**
  * The MSG family on the server profile. The shared `server-message-vectors.json` is the core's,
@@ -67,7 +67,7 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
-describe('MSG-1/MSG-4 — an entry is four fixed pieces, message is the filled template', () => {
+describe('MSG-1/MSG-4 — an entry is a template and its params; everything around it is the framework\'s', () => {
     it('reproduces every canonical entry from its template and params', async () => {
         const { langsys } = server();
         const built = await langsys.run({ locale: 'es' }, () =>
@@ -97,53 +97,74 @@ describe('MSG-1/MSG-4 — an entry is four fixed pieces, message is the filled t
         expect(e.message).toBe('Between 3 and {max}.');
     });
 
-    it('the default envelope resolves back to exactly its entries', async () => {
+    const entry = { field: 'password', code: 'min', template: 'The password field must be at least {min} characters.', params: { min: 12 } };
+
+    it('attaches entries to the framework\'s own error body, which is otherwise unchanged', async () => {
         const { langsys } = server();
-        const body = (
-            await langsys.run({ locale: 'es' }, () =>
-                langsys.errorBody([langsys.message({ field: 'password', code: 'too_short', template: 'The password must be at least {min} characters.', params: { min: 12 } })]),
-            )
+        const native = { message: 'The given data was invalid.', errors: { password: ['The password field must be at least 12 characters.'] } };
+        const body = (await langsys.run({ locale: 'es' }, () => langsys.attachMessages(structuredClone(native), [langsys.message(entry)]))).value;
+        const { langsys_messages: attached, ...rest } = body as typeof native & { langsys_messages: unknown };
+        expect(rest).toEqual(native);
+        expect(attached).toEqual([{ ...entry, message: 'The password field must be at least 12 characters.' }]);
+        expect(resolveServerMessages(body, { key: 'langsys_messages' })).toEqual(attached);
+    });
+
+    it('under a configured key, on a second framework\'s body shape', async () => {
+        const { langsys } = server();
+        const native = { statusCode: 400, message: ['password must be longer than or equal to 12 characters'], error: 'Bad Request' };
+        const body = (await langsys.run({ locale: 'es' }, () => langsys.attachMessages(structuredClone(native), [langsys.message(entry)], { key: 'translations' }))).value;
+        const { translations, ...rest } = body as typeof native & { translations: unknown };
+        expect(rest).toEqual(native);
+        expect(resolveServerMessages(body, { key: 'translations' })).toEqual(translations);
+    });
+
+    it('only template and params are required; message is the fill', async () => {
+        const { langsys } = server();
+        const e = (await langsys.run({ locale: 'es' }, () => langsys.message({ template: 'At least {min} characters.', params: { min: 3 } }))).value;
+        expect(e).toEqual({ template: 'At least {min} characters.', params: { min: 3 }, message: 'At least 3 characters.' });
+    });
+});
+
+describe('MSG-2 — a code is the framework\'s own, passed through, never chosen from a vocabulary', () => {
+    it('passes the framework\'s identifier through unchanged, and omits code when there is none', async () => {
+        const { langsys } = server();
+        const [withCode, without] = (
+            await langsys.run({ locale: 'es' }, () => [
+                langsys.message({ code: 'isEmail', template: 'email must be an email' }),
+                langsys.message({ template: 'Something went wrong.' }),
+            ])
         ).value;
-        expect(body).toMatchObject({ status: false, error: { code: 'validation_failed', template: 'The request failed validation.' } });
-        expect(resolveServerMessages(body).map((e) => e.code)).toEqual(['validation_failed', 'too_short']);
+        expect(withCode!.code).toBe('isEmail');
+        expect(without).not.toHaveProperty('code');
     });
-});
-
-describe('MSG-2 — codes are logic, from the shared vocabulary', () => {
-    it('exports the vocabulary, fallback included', () => {
-        expect(SERVER_MESSAGE_CODES).toContain('invalid');
-        expect(SERVER_MESSAGE_CODES).toContain('too_short');
+    it('exports no vocabulary of its own', () => {
+        expect(pkg).not.toHaveProperty('SERVER_MESSAGE_CODES');
+        expect(pkg).not.toHaveProperty('errorBody');
     });
-    it('the same failure carries the same code in two locales and after a wording change', async () => {
+    it('the same failure keeps its code across locales', async () => {
         const { langsys } = server();
-        const es = (await langsys.run({ locale: 'es' }, () => langsys.message({ code: 'required', template: 'The name is required.' }))).value;
-        const en = (await langsys.run({ locale: 'en' }, () => langsys.message({ code: 'required', template: 'A name is required.' }))).value;
-        expect([es.code, en.code]).toEqual(['required', 'required']);
+        const a = (await langsys.run({ locale: 'es' }, () => langsys.message({ code: 'min', template: 'Too short.' }))).value;
+        const b = (await langsys.run({ locale: 'en' }, () => langsys.message({ code: 'min', template: 'Too short.' }))).value;
+        expect([a.code, b.code]).toEqual(['min', 'min']);
     });
 });
 
-describe('MSG-3/MSG-11 check 1 — a template is refused when it carries a label marker or a framework placeholder', () => {
-    it('refuses label-carrying marker names', () => {
-        for (const name of ['attribute', 'field', 'label', 'other', 'values']) {
-            expect(checkTemplate(`The {${name}} is required.`), name).toMatch(new RegExp(`\\{${name}\\}`));
-        }
+describe('MSG-11 check 1 — a template holding one of this ecosystem\'s label placeholders is refused', () => {
+    it.each(['$property must be an email', 'The ${path} field is required', '${label} is invalid', '"{{#label}}" is required', '{{#key}} must be a string'])('refuses %s', (template) => {
+        expect(checkTemplate(template)).toMatch(/label placeholder/);
     });
-    it('refuses a leftover framework placeholder', () => {
-        expect(checkTemplate('The :attribute is required.')).toMatch(/:attribute/);
-        expect(checkTemplate('The {{field}} is required.')).toMatch(/\{\{field\}\}/);
+    it('CONTROL: the label written in, and a number marker, pass', () => {
+        expect(checkTemplate('The email field must be a valid email address.')).toBeNull();
+        expect(checkTemplate('The password field must be at least {min} characters.')).toBeNull();
     });
-    it('CONTROL: whole sentences and non-translatable markers pass', () => {
-        expect(checkTemplate('The password is required.')).toBeNull();
-        expect(checkTemplate('The password must be at least {min} characters.')).toBeNull();
-    });
-    it('two required templates are two phrases, registered separately', async () => {
+    it('two fields failing one rule are two phrases, registered separately', async () => {
         const { langsys, registered } = server();
         await langsys.run({ locale: 'es' }, () => {
-            langsys.message({ code: 'required', template: 'The password is required.' });
-            langsys.message({ code: 'required', template: 'The name is required.' });
+            langsys.message({ code: 'required', template: 'The password field is required.' });
+            langsys.message({ code: 'required', template: 'The name field is required.' });
         });
         await settle();
-        expect(registered.map((i) => i.phrase)).toEqual(['The password is required.', 'The name is required.']);
+        expect(registered.map((i) => i.phrase)).toEqual(['The password field is required.', 'The name field is required.']);
     });
 });
 

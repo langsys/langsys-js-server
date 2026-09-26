@@ -1,18 +1,17 @@
 /**
  * Server messages (the MSG family), server profile.
  *
- * An entry is `{ field?, code, message, template, params? }` with those keys fixed (MSG-1): `code`
- * is the logic slug (MSG-2), `template` the whole source sentence (MSG-3), `params` the
- * non-translatable values that fill its markers, and `message` the template filled (MSG-4). The
- * marker grammar, `fill`, and resolving entries out of a response body are the core's, so every
- * SDK reads a template the same way; this module adds what a server does: checking a template
- * when it is declared, and building entries.
+ * Translation needs two things from a failure: `template`, the framework's own sentence before its
+ * values are filled, with the field's label written in (MSG-3), and `params`, the non-translatable
+ * values that fill its `{name}` markers. `message` is the template filled, the fallback a client
+ * shows when it cannot look the template up (MSG-1, MSG-4). Everything else is the framework's and
+ * passes through unchanged: its field path, and its own identifier for the failure as `code`
+ * (MSG-2). The marker grammar, `fill`, and resolving entries out of a response body are the core's.
  */
 import { fillTemplate, templateMarkers } from 'langsys-js-typescript/pure';
 
 export {
     DEFAULT_SERVER_MESSAGE_CATEGORY,
-    SERVER_MESSAGE_CODES,
     fillTemplate,
     resolveServerMessages,
     templateMarkers,
@@ -21,10 +20,10 @@ export {
 
 /** One server message entry (MSG-1). */
 export interface ServerMessage {
-    /** Dotted path of the failing field, for a field failure: `items.3.label`. */
+    /** The failing field, in the framework's own path format, when the framework reports one. */
     field?: string;
-    /** The stable snake_case slug an app branches on; never used to choose text. */
-    code: string;
+    /** The framework's own identifier for the failure, passed through; never used to choose text. */
+    code?: string;
     /** The template filled with its params. */
     message: string;
     /** The whole source sentence, the phrase that is registered and translated. */
@@ -34,36 +33,28 @@ export interface ServerMessage {
 }
 
 export interface MessageInput {
-    code: string;
+    code?: string;
     template: string;
     params?: Record<string, unknown>;
     field?: string;
 }
 
-/** Marker names that carry a label by construction (MSG-11): a label is written in, never markered. */
-const LABEL_MARKERS = ['attribute', 'field', 'label', 'other', 'values'];
-
-/** A framework placeholder left in the text: Laravel's `:attribute`, a `{{field}}` template slot. */
-const FRAMEWORK_PLACEHOLDER = /(?:^|[\s("'])(:[a-z][a-z_]*)\b|(\{\{\s*[A-Za-z_][\w.]*\s*\}\})/;
-
 /**
- * Why a template may not be declared, or `null` when it may (MSG-3, MSG-11 check 1). A template
- * is refused when a marker's name carries a label by construction, or when a framework
- * placeholder that should have been written in is still in the text.
+ * The label placeholders of this ecosystem's validators (MSG-11 check 1): class-validator's
+ * `$property`, yup's `${path}` and `${label}`, joi's `{{#label}}` and `{{#key}}`. A template still
+ * holding one should have had the field's label written in (MSG-3).
  */
+const LABEL_PLACEHOLDERS: { pattern: RegExp; framework: string }[] = [
+    { pattern: /\$property\b/, framework: 'class-validator' },
+    { pattern: /\$\{\s*(?:path|label)\s*\}/, framework: 'yup' },
+    { pattern: /\{\{\s*#(?:label|key)\s*\}\}/, framework: 'joi' },
+];
+
+/** Why a template may not be declared, or `null` when it may (MSG-11 check 1). */
 export function checkTemplate(template: string): string | null {
-    // The placeholder first: `{{field}}` also contains the marker `{field}`, and the leftover
-    // placeholder is the precise diagnosis.
-    const leftover = template.match(FRAMEWORK_PLACEHOLDER);
-    if (leftover) {
-        return `${leftover[1] ?? leftover[2]} is a framework placeholder; write the value into the sentence`;
-    }
-    const labelled = templateMarkers(template).find((name) => LABEL_MARKERS.includes(name));
-    if (labelled) {
-        return (
-            `the marker {${labelled}} carries a label, which must be written into the sentence ` +
-            'so the translation agrees with it; markers are for numbers, dates and raw input only'
-        );
+    for (const { pattern, framework } of LABEL_PLACEHOLDERS) {
+        const found = template.match(pattern);
+        if (found) return `${found[0]} is a label placeholder (${framework}); write the field's label into the sentence`;
     }
     return null;
 }
@@ -73,7 +64,7 @@ export function buildMessage(input: MessageInput): ServerMessage {
     const hasMarkers = templateMarkers(input.template).length > 0;
     return {
         ...(typeof input.field === 'string' && input.field !== '' ? { field: input.field } : {}),
-        code: input.code,
+        ...(typeof input.code === 'string' && input.code !== '' ? { code: input.code } : {}),
         message: fillTemplate(input.template, input.params ?? {}),
         template: input.template,
         ...(hasMarkers && input.params ? { params: input.params } : {}),

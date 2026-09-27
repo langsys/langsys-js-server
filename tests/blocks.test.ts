@@ -646,4 +646,49 @@ describe('MARK-3/MARK-4 — a nested content-block host is excised from the encl
         await new Promise((r) => setTimeout(r, 20));
         expect((s.registered.flat() as { type: string; phrase?: string }[]).map((i) => [i.type, i.phrase])).toEqual([['phrase', 'Outer']]);
     });
+    // MARK-3 (8.2.20): an identity is excised from an enclosing walk either way; whether it
+    // registers is decided by the walk that meets it as its own unit, inside or outside a resolved
+    // scope. The enclosing render is never that walk.
+    it.each([
+        ['outside a resolved scope', '<div data-ls-contentblock="abc123"><p>Inner</p></div>'],
+        ['resolved on the host', '<div data-ls-contentblock="abc123" data-ls-resolved="it"><p>Inner</p></div>'],
+        ['resolved on an ancestor only', '<section data-ls-resolved="it"><div data-ls-contentblock="abc123"><p>Inner</p></div></section>'],
+        ['legacy spelling, outside', '<div data-langsys-contentblock="abc123"><p>Inner</p></div>'],
+    ])('an identity %s is excised: no token, no registration, its markup untouched', async (_case, nested) => {
+        const html = `<p>Outer</p>${nested}`;
+        expect(tokenizeHtml(html)).toEqual(['Outer']);
+        const s = serve({ __uncategorized__: { abc123: { phrases: [{ phrase: 'Interno' }] } } as never });
+        const out = (await s.run(() => renderTranslateBlock(html))).value;
+        expect(out.html).toBe(html);
+        await new Promise((r) => setTimeout(r, 20));
+        const items = s.registered.flat() as { type: string; phrase?: string; custom_id?: string; content?: string }[];
+        expect(items.map((i) => [i.type, i.phrase])).toEqual([['phrase', 'Outer']]);
+        expect(items.some((i) => i.custom_id === 'abc123' || (i.content ?? '').includes('Inner'))).toBe(false);
+    });
+});
+
+describe('MARK-3 — the server half: a block the catalog lacks is served as source under its derived id', () => {
+    const BLOCK = '<p>Fresh <strong>copy</strong> here</p>';
+    it('on a non-base render, under a resolved root, it registers under exactly the id it stamps', async () => {
+        const s = serve({});
+        const out = (await s.run(() => renderTranslateBlock(BLOCK))).value;
+        expect(out.known).toBe(false);
+        expect(out.html).toBe(BLOCK);
+        const stamped = out.hostAttributes[CONTENT_BLOCK_MARKER_EMIT];
+        expect(stamped).toBe(generateCustomId('', tokenizeHtml(BLOCK)));
+        await new Promise((r) => setTimeout(r, 20));
+        const blocks = (s.registered.flat() as { type: string; custom_id?: string }[]).filter((i) => i.type === 'content_block');
+        expect(blocks.map((b) => b.custom_id)).toEqual([stamped]);
+    });
+
+    it('on a base-locale render it stamps the same id and leaves registration to the client, whose root is not resolved', async () => {
+        const s = serve({}, { locale: 'en' });
+        const out = (await s.run(() => renderTranslateBlock(BLOCK))).value;
+        expect(out.hostAttributes[CONTENT_BLOCK_MARKER_EMIT]).toBe(generateCustomId('', tokenizeHtml(BLOCK)));
+        await new Promise((r) => setTimeout(r, 20));
+        expect(s.registered.flat()).toEqual([]);
+        const langsys = createLangsysServer({ projectId: 'p', apiKey: 'k', baseLocale: 'en', harvest: false, flushOnExit: false });
+        expect(langsys.resolvedRootAttributes('en')).toEqual({});
+        expect(langsys.resolvedRootAttributes('it')).toEqual({ 'data-ls-resolved': 'it' });
+    });
 });

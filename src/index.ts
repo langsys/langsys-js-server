@@ -31,6 +31,7 @@ import type {
     KeyType,
     LangsysServerConfig,
     MissingPhrase,
+    RegistrationResult,
     RequestScopeOptions,
 } from './types.js';
 
@@ -88,11 +89,13 @@ export {
     type ServerMessagePieces,
 } from './messages.js';
 export type {
+    RegistrationSkip,
     Catalog,
     CatalogCategory,
     KeyType,
     LangsysServerConfig,
     MissingPhrase,
+    RegistrationResult,
     RequestScopeOptions,
     SharedCache,
     TranslateParams,
@@ -587,7 +590,7 @@ export class LangsysServer {
     async registerTemplates(
         declared: readonly (string | { template: string; where?: string })[],
         options: { register?: boolean } = {},
-    ): Promise<{ templates: string[]; problems: { template: string; where?: string; problem: string }[]; registered: string[] }> {
+    ): Promise<{ templates: string[]; problems: { template: string; where?: string; problem: string }[]; registered: string[]; result: RegistrationResult }> {
         const templates: string[] = [];
         const problems: { template: string; where?: string; problem: string }[] = [];
         for (const item of declared) {
@@ -597,15 +600,22 @@ export class LangsysServer {
             if (problem) problems.push({ template, ...(where ? { where } : {}), problem });
             else if (!templates.includes(template)) templates.push(template);
         }
-        if (!options.register || !templates.length) return { templates, problems, registered: [] };
+        if (!options.register || !templates.length) return { templates, problems, registered: [], result: { status: true, sent: 0 } };
 
         await this.ensureAuthorized();
         if (this.writeEnabled === false || (this.writeEnabled === undefined && this.keyType !== 'write')) {
             problems.push({ template: '', problem: 'this API key may not register phrases; use a write key' });
-            return { templates, problems, registered: [] };
+            return { templates, problems, registered: [], result: { status: false, skipped: true, reason: 'not-write-enabled', sent: 0, held: 0 } };
         }
         const probe = (this.servedLocales ?? []).find((l) => l !== this.baseLocale);
-        const listed = probe ? (await this.catalogs.get(probe)).catalog[this.messageCategory] : undefined;
+        const probed = probe ? await this.catalogs.get(probe) : undefined;
+        // WIRE-4 — without the catalog there is no telling which templates it lists, and
+        // registering all of them against an outage is the write storm the rule forbids.
+        if (probed && !probed.ok) {
+            problems.push({ template: '', problem: `the catalog for "${probe}" could not be read, so nothing was registered` });
+            return { templates, problems, registered: [], result: { status: false, skipped: true, reason: 'catalog-unavailable', sent: 0, held: 0 } };
+        }
+        const listed = probed?.catalog[this.messageCategory];
         const fresh = templates.filter((t) => !(listed && Object.prototype.hasOwnProperty.call(listed, t)));
         const stride = Math.max(1, Math.floor(this.batchLimit) || 1);
         const registered: string[] = [];
@@ -614,12 +624,18 @@ export class LangsysServer {
             const res = await this.api.createTranslatableItems(chunk.map((phrase) => ({ type: 'phrase', phrase, category: this.messageCategory })));
             if (!res.status) {
                 problems.push({ template: '', problem: `registration failed after ${registered.length}: ${JSON.stringify(res.errors)}` });
-                break;
+                if (registered.length && probe) await this.catalogs.invalidate(probe);
+                return {
+                    templates,
+                    problems,
+                    registered,
+                    result: { status: false, reason: 'refused', sent: registered.length, held: fresh.length - registered.length, errors: res.errors },
+                };
             }
             registered.push(...chunk);
         }
         if (registered.length && probe) await this.catalogs.invalidate(probe);
-        return { templates, problems, registered };
+        return { templates, problems, registered, result: { status: true, sent: registered.length } };
     }
 
     /**
@@ -666,7 +682,15 @@ export class LangsysServer {
         return { duplicates: this.legacyKeys?.duplicates() ?? {}, problems: this.legacyKeys?.problems() ?? [] };
     }
 
-    flush(result: RenderResult<unknown>): Promise<void> {
+    /**
+     * Drain the registrations a render collected, and report what happened (REG-10): `{ status:
+     * true, sent }` when everything collected was accepted or there was nothing to send; `{ status:
+     * false, skipped: true, reason }` for a write skipped on purpose — `not-write-enabled`,
+     * `catalog-unavailable`, `awaiting-authorization`, `backing-off`, `harvest-disabled`; and
+     * `refused` or `failed`, with the errors, when the server declined the batch or the request did
+     * not complete. After the scheduled drain has run, it reports that drain.
+     */
+    flush(result: RenderResult<unknown>): Promise<RegistrationResult> {
         // Reuse the scope that rendered, so this shares the once-only latch with the
         // drain `run()` already scheduled. Reconstructing a scope from the public fields
         // gave it a FRESH latch, and the documented Workers path posted the identical
@@ -678,7 +702,7 @@ export class LangsysServer {
                 'flush() was given a value that did not come from run(). Nothing was drained. ' +
                     'Pass the RenderResult run() returned, not a copy of it.',
             );
-            return Promise.resolve();
+            return Promise.resolve({ status: false, skipped: true, reason: 'not-from-run', sent: 0, held: 0 });
         }
 
         return drainMissQueue(scope, this.api, this.harvestEnabled, this.registrationBackoff, this.retained);

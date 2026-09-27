@@ -19,7 +19,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Catalog, KeyType, MissingPhrase } from './types.js';
+import type { Catalog, KeyType, MissingPhrase, RegistrationResult } from './types.js';
 import type { Logger } from './logger.js';
 import type { TranslatableItem } from './api.js';
 
@@ -95,6 +95,10 @@ export interface RequestScope {
     drained: boolean;
     /** Guard against two drains running concurrently for the same request. */
     draining: boolean;
+    /** The drain in flight, which a concurrent `flush()` waits on and reports. */
+    inflight?: Promise<RegistrationResult>;
+    /** What this request's last drain did (REG-10), reported again when there is nothing left to send. */
+    lastRegistration?: RegistrationResult;
     /**
      * How many entries of `missQueue` have already been POSTed.
      *

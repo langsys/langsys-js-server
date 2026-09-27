@@ -115,3 +115,24 @@ export interface MissingPhrase {
 export interface TranslateParams {
     [key: string]: string | number | boolean | Date | null | undefined;
 }
+
+/** Why a registration was skipped on purpose (REG-10). The names are the core's where the two share a case. */
+export type RegistrationSkip =
+    | 'not-write-enabled'
+    | 'catalog-unavailable'
+    | 'harvest-disabled'
+    | 'awaiting-authorization'
+    | 'backing-off'
+    | 'not-from-run';
+
+/**
+ * What a registration did (REG-10), in the core's shape. `status` is true only when everything
+ * the request collected was accepted, or there was nothing to send. A write skipped on purpose is
+ * `skipped: true` and names its reason; a batch the server refused is `refused`, and one that never
+ * completed is `failed`, each with its errors. `held` is how many items stay on the request for a
+ * later attempt.
+ */
+export type RegistrationResult =
+    | { status: true; sent: number }
+    | { status: false; skipped: true; reason: RegistrationSkip; sent: number; held: number }
+    | { status: false; skipped?: false; reason: 'refused' | 'failed'; sent: number; held: number; errors?: unknown };

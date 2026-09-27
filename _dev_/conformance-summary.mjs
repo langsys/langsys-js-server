@@ -40,7 +40,7 @@ const fail = (lines) => {
  * whenever the two revisions happen to share ids, which is most of the time and exactly
  * when nobody looks.
  */
-const PINNED_SPEC_BLOB = '5d7e6890b733a50fb6f5f5c30e0056c6ef7bcf45';
+const PINNED_SPEC_BLOB = '7eee2c10398a1032831837c310215f3b9f16d306';
 const header = text.match(/^\|\s*\*\*Spec revision read\*\*\s*\|([^\n]*)$/m);
 if (!header || !header[1].includes(`blob ${PINNED_SPEC_BLOB}`)) {
     fail(`The "Spec revision read" header does not cite blob ${PINNED_SPEC_BLOB}, which is the revision this script's id list was extracted from. Move both together.`);
@@ -125,11 +125,11 @@ if (duplicates.length) {
  *
  * Uniqueness alone never met the green definition: a DELETED row printed "78 rules" and
  * exited 0, because nothing compared the table against the spec. The expected set is
- * pinned here to PINNED_SPEC_BLOB (113 ids), so this runs in CI without a sibling checkout.
+ * pinned here to PINNED_SPEC_BLOB (114 ids), so this runs in CI without a sibling checkout.
  * When the spec moves, this list and the header move in the same commit, and the header
  * check above fails if only one of them did.
  */
-const EXPECTED_RULE_IDS = ["GATE-1","GATE-2","GATE-3","GATE-4","GATE-5","GATE-6","GATE-7","GATE-8","GATE-9","GATE-10","CAT-1","CAT-2","CAT-3","REG-1","REG-2","REG-3","REG-4","REG-5","REG-6","REG-7","REG-8","REG-9","REG-10","REG-11","REG-12","REG-13","HINT-1","HINT-2","HINT-3","HINT-4","HINT-5","HINT-6","HINT-7","HINT-8","HINT-9","HINT-10","HINT-11","HINT-12","HINT-13","ICU-1","ICU-2","ICU-3","ICU-4","ICU-5","ICU-6","CID-1","CID-2","CID-3","CID-4","TOK-1","TOK-2","TOK-3","TOK-4","TOK-5","TOK-6","MARK-1","MARK-2","MARK-3","MARK-4","SSR-1","SSR-2","SSR-3","SRV-1","SRV-2","SRV-3","SRV-4","SRV-5","SRV-6","MSG-1","MSG-2","MSG-3","MSG-4","MSG-5","MSG-6","MSG-7","MSG-8","MSG-9","MSG-10","MSG-11","MSG-12","MIG-1","MIG-2","MIG-3","MIG-4","MIG-5","MIG-6","MIG-7","MIG-8","MIG-9","SNAP-1","SNAP-2","SNAP-3","BIND-1","BIND-2","BIND-3","BIND-4","BIND-5","BIND-6","GRANT-1","GRANT-2","GRANT-3","GRANT-4","CACHE-1","CACHE-2","OBS-1","WIRE-1","WIRE-2","WIRE-3","WIRE-4","WIRE-5","CONF-1","CONF-2","CONF-3"];
+const EXPECTED_RULE_IDS = ["GATE-1","GATE-2","GATE-3","GATE-4","GATE-5","GATE-6","GATE-7","GATE-8","GATE-9","GATE-10","CAT-1","CAT-2","CAT-3","REG-1","REG-2","REG-3","REG-4","REG-5","REG-6","REG-7","REG-8","REG-9","REG-10","REG-11","REG-12","REG-13","HINT-1","HINT-2","HINT-3","HINT-4","HINT-5","HINT-6","HINT-7","HINT-8","HINT-9","HINT-10","HINT-11","HINT-12","HINT-13","ICU-1","ICU-2","ICU-3","ICU-4","ICU-5","ICU-6","CID-1","CID-2","CID-3","CID-4","TOK-1","TOK-2","TOK-3","TOK-4","TOK-5","TOK-6","MARK-1","MARK-2","MARK-3","MARK-4","SSR-1","SSR-2","SSR-3","SRV-1","SRV-2","SRV-3","SRV-4","SRV-5","SRV-6","SRV-7","MSG-1","MSG-2","MSG-3","MSG-4","MSG-5","MSG-6","MSG-7","MSG-8","MSG-9","MSG-10","MSG-11","MSG-12","MIG-1","MIG-2","MIG-3","MIG-4","MIG-5","MIG-6","MIG-7","MIG-8","MIG-9","SNAP-1","SNAP-2","SNAP-3","BIND-1","BIND-2","BIND-3","BIND-4","BIND-5","BIND-6","GRANT-1","GRANT-2","GRANT-3","GRANT-4","CACHE-1","CACHE-2","OBS-1","WIRE-1","WIRE-2","WIRE-3","WIRE-4","WIRE-5","CONF-1","CONF-2","CONF-3"];
 const missing = EXPECTED_RULE_IDS.filter((id) => !seen.has(id));
 const unknown = [...seen].filter((id) => !EXPECTED_RULE_IDS.includes(id));
 if (missing.length || unknown.length) {

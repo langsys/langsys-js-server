@@ -146,6 +146,70 @@ describe('REG-10 — a failed registration never reaches the render', { timeout:
     });
 });
 
+describe('REG-10 — a skipped write returns a non-success result naming its reason', { timeout: 15_000 }, () => {
+    const flushed = async (apiKey: string, phrase: string) => {
+        const s = server(apiKey);
+        const r = await s.run({ locale: 'it' }, () => t(phrase));
+        return s.flush(r);
+    };
+    const catalogHas = async (apiKey: string, phrase: string) => {
+        const res = await fetch(`${double.baseUrl}/translations?project_id=p&locale=it`, { headers: { 'x-authorization': apiKey } });
+        const data = ((await res.json()) as { data?: Record<string, Record<string, unknown>> }).data ?? {};
+        return Object.values(data).some((bucket) => Object.prototype.hasOwnProperty.call(bucket, phrase));
+    };
+
+    it('a session the double computes read-only: skipped, "not-write-enabled"', async () => {
+        await seed([{ key: 'rk', type: 'read' }]);
+        expect(await flushed('rk', 'Read only')).toEqual({ status: false, skipped: true, reason: 'not-write-enabled', sent: 0, held: 0 });
+        expect(await accepted()).toEqual([]);
+    });
+
+    it('the first catalog fetch failed: skipped, "catalog-unavailable"', async () => {
+        await seed([{ key: 'wk', type: 'write' }], { faults: [{ method: 'GET', path: '/translations', status: 500 }] });
+        expect(await flushed('wk', 'Outage copy')).toEqual({ status: false, skipped: true, reason: 'catalog-unavailable', sent: 0, held: 0 });
+        expect(await accepted()).toEqual([]);
+    });
+
+    it('once the catalog recovers, the same server object reports the write, not the old outage', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        const T0 = Date.now();
+        await seed([{ key: 'wk', type: 'write' }], { faults: [{ method: 'GET', path: '/translations', status: 500, times: 1 }] });
+        const s = server('wk');
+        const down = await s.run({ locale: 'it' }, () => t('Outage copy'));
+        expect(await s.flush(down)).toMatchObject({ status: false, skipped: true, reason: 'catalog-unavailable' });
+        vi.setSystemTime(T0 + 10_000); // past the catalog's failure window
+        const up = await s.run({ locale: 'it' }, () => t('Recovered copy'));
+        expect(await s.flush(up)).toEqual({ status: true, sent: 1 });
+        expect(await accepted()).toEqual(['Recovered copy']);
+    });
+
+    it('a seeded failure on the registration route: a failure, distinct from both skips', async () => {
+        await seed([{ key: 'wk', type: 'write' }], { faults: [{ method: 'POST', path: '/translatable-items', status: 500 }] });
+        const refused = await flushed('wk', 'Refused');
+        expect(refused).toMatchObject({ status: false, reason: 'refused', sent: 0, held: 1 });
+        expect(refused).not.toHaveProperty('skipped', true);
+
+        await seed([{ key: 'wk', type: 'write' }], { faults: [{ method: 'POST', path: '/translatable-items', drop: true }] });
+        const dropped = await flushed('wk', 'Dropped');
+        expect(dropped).toMatchObject({ status: false, reason: 'failed', sent: 0, held: 1 });
+        expect(dropped).not.toHaveProperty('skipped', true);
+    });
+
+    it('a write-enabled registration: success, and the phrase is in the next catalog read', async () => {
+        await seed([{ key: 'wk', type: 'write' }]);
+        expect(await flushed('wk', 'Written')).toEqual({ status: true, sent: 1 });
+        expect(await catalogHas('wk', 'Written')).toBe(true);
+    });
+
+    it('a flush() after the scheduled drain skipped reports that skip, not an empty success', async () => {
+        await seed([{ key: 'rk', type: 'read' }]);
+        const s = server('rk');
+        const r = await s.run({ locale: 'it' }, () => t('Read only'));
+        await new Promise((res) => setTimeout(res, 50)); // the scheduled drain has run
+        expect(await s.flush(r)).toMatchObject({ status: false, skipped: true, reason: 'not-write-enabled' });
+    });
+});
+
 describe('WIRE-2 — an empty 204 success is a success', () => {
     it('after a 204 the next phrase is sent at once: no failure was recorded, so no backoff window opened', async () => {
         await seed([{ key: 'wk', type: 'write' }], { faults: [{ method: 'POST', path: '/translatable-items', status: 204 }] });

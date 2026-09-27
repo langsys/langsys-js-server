@@ -77,6 +77,12 @@ whose markup carries none of the listed constructs keep the ids they had.
   `langsys.registerTemplates()` with its `langsys-messages` command lists and registers every
   declared template, reporting what it cannot and failing only under `--strict`. New option
   `messageCategory` (default `Errors`).
+- **Registration reports what it did** (REG-10). `langsys.flush(result)` resolves to `{ status:
+  true, sent }`, or `{ status: false, skipped: true, reason }` for a write skipped on purpose
+  (`not-write-enabled`, `catalog-unavailable`, `awaiting-authorization`, `backing-off`,
+  `harvest-disabled`), or `{ status: false, reason: 'refused' | 'failed', errors }` — the core's
+  shape. `registerTemplates()` returns the same as `result`, and registers nothing while the
+  catalog cannot be read.
 - **Seeding from a snapshot** (SNAP-2). The `snapshot` option serves renders from a snapshot until
   the live catalog arrives, never registers against it, and supplies the locales `resolveLocale`
   serves while authorization is unavailable.

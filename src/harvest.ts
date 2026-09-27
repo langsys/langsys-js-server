@@ -22,7 +22,7 @@
 import type { LangsysApi, TranslatableItem } from './api.js';
 import type { RequestScope } from './context.js';
 import type { Logger } from './logger.js';
-import type { KeyType, MissingPhrase } from './types.js';
+import type { KeyType, MissingPhrase, RegistrationResult, RegistrationSkip } from './types.js';
 
 /**
  * Registration batch size when the server advertises no usable cap (REG-9).
@@ -288,7 +288,7 @@ export class RetainedQueue {
     private flushing: Promise<void> | undefined;
 
     constructor(
-        private readonly drain: (scope: RequestScope, force: boolean) => Promise<void>,
+        private readonly drain: (scope: RequestScope, force: boolean) => Promise<unknown>,
         private readonly logger: Logger,
         private readonly onChange?: (size: number) => void,
     ) {}
@@ -389,7 +389,8 @@ export class RetainedQueue {
  * Drain a request's miss queue. Call this only AFTER the response has flushed.
  *
  * Returns a promise for tests and for edge runtimes with `waitUntil`; on Node the caller
- * should NOT await it in the request path.
+ * should NOT await it in the request path. It resolves to what the drain did (REG-10): a
+ * write skipped on purpose names its reason, and never resolves success-shaped.
  */
 export async function drainMissQueue(
     scope: RequestScope,
@@ -398,17 +399,27 @@ export async function drainMissQueue(
     backoff: RegistrationBackoff,
     retained?: RetainedQueue,
     force = false,
-): Promise<void> {
+): Promise<RegistrationResult> {
     // A concurrency guard, not a once-only latch. `run()` schedules a drain and the
     // caller may also `flush()`; both must be safe, and a LATER drain must remain
-    // possible for phrases discovered in a streamed tail.
-    if (scope.draining) return;
+    // possible for phrases discovered in a streamed tail. A drain arriving while one is
+    // sending waits for it and reports it.
+    if (scope.draining && scope.inflight) return scope.inflight;
+
+    const settle = (result: RegistrationResult): RegistrationResult => (scope.lastRegistration = result);
+    const skip = (reason: RegistrationSkip, held: number): RegistrationResult => settle({ status: false, skipped: true, reason, sent: 0, held });
+
+    // WIRE-4 — nothing is collected against an unavailable catalog, so the queue is empty
+    // here. Reported as the skip it is rather than as a drain with nothing to send.
+    if (!scope.catalogAvailable) return skip('catalog-unavailable', 0);
 
     const batch = scope.missQueue.slice(scope.posted);
     const blocks = scope.blockQueue.slice(scope.blocksPosted);
     if (batch.length === 0 && blocks.length === 0 && scope.retryItems.length === 0) {
         scope.drained = true;
-        return;
+        // Nothing new: report what this request's last drain did, so a `flush()` after the
+        // scheduled drain skipped does not read as success.
+        return scope.lastRegistration ?? settle({ status: true, sent: 0 });
     }
 
     // Take everything this drain is responsible for off the queues first: items retained
@@ -432,12 +443,12 @@ export async function drainMissQueue(
     // Read from the scope, not from a parameter threaded down from the server instance:
     // this is the decision that was true when THIS request started rendering.
     const decision = canHarvest(scope.writeEnabled, scope.keyType, enabled, scope.logger);
-    if (decision === 'refuse') return;
+    if (decision === 'refuse') return skip(enabled ? 'not-write-enabled' : 'harvest-disabled', 0);
     if (decision === 'hold') {
         // GATE-2: kept on this request and retried once the decision can be read.
         scope.retryItems = items;
         retained?.retain(scope, HOLD_RETRY_MS);
-        return;
+        return skip('awaiting-authorization', items.length);
     }
 
     // REG-8 — this instance is backing off after a failed send, so nothing goes out now. The
@@ -456,11 +467,21 @@ export async function drainMissQueue(
                     'phrases from other renders in this window, without another warning.',
             );
         }
-        return;
+        return skip('backing-off', items.length);
     }
 
     scope.draining = true;
+    scope.inflight = send(scope, api, backoff, retained, items).then(settle);
+    return scope.inflight;
+}
 
+async function send(
+    scope: RequestScope,
+    api: LangsysApi,
+    backoff: RegistrationBackoff,
+    retained: RetainedQueue | undefined,
+    items: TranslatableItem[],
+): Promise<RegistrationResult> {
     // REG-9 — chunk to the server's cap, which it ENFORCES: an oversized batch is
     // rejected outright, so exceeding it does not send a big request, it loses every
     // phrase in it. REG-7 — sequential, so only one send is ever in flight.
@@ -491,13 +512,14 @@ export async function drainMissQueue(
                     response.errors,
                 );
                 keepUnsent(pausedMs);
-                return;
+                return { status: false, reason: 'refused', sent, held: items.length - sent, errors: response.errors };
             }
             sent += chunk.length;
             backoff.succeeded();
         }
         scope.logger.log(`Registered ${sent} phrase(s) for "${scope.locale}"`);
         retained?.wake();
+        return { status: true, sent };
     } catch (err) {
         const pausedMs = backoff.failed(sendToken);
         scope.logger.error(
@@ -506,6 +528,7 @@ export async function drainMissQueue(
             err,
         );
         keepUnsent(pausedMs);
+        return { status: false, reason: 'failed', sent, held: items.length - sent, errors: [err] };
     } finally {
         scope.draining = false;
         scope.drained = true;
@@ -521,7 +544,7 @@ export async function drainMissQueue(
  *
  * On edge runtimes prefer passing the promise to `ctx.waitUntil()` instead — see README.
  */
-export function scheduleDrain(run: () => Promise<void>): void {
+export function scheduleDrain(run: () => Promise<unknown>): void {
     const schedule: (cb: () => void) => void =
         typeof setImmediate === 'function' ? setImmediate : (cb) => setTimeout(cb, 0);
 

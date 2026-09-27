@@ -44,17 +44,18 @@ const PHP_FIXTURE_BLOB = '633a09d9e1abd81bb1b77a7d861ff9328d734a48';
 
 /**
  * The core's, reached through the same `node_modules` symlink the walker-parity suite uses,
- * and pinned by blob: `ed6c35550518af5910e8cb8bd64ff2606e3904d2` (core `239166a6`), 32 rows measured
- * against spec blob `5d7e6890`. The blob, the spec blob and the row count are each asserted, and every row
+ * and pinned by blob: `23b527ce4cf1b06aad7990cc6339e3e1742d0888` (core `01bf4bd`), 32 rows measured
+ * against spec blob `5f01ef7d` (8.2.19). 8.2.20 changed only MARK-3's registration clause, which no row
+ * measures. The blob, the spec blob and the row count are each asserted, and every row
  * is asserted on its own.
  */
 const CORE_FIXTURE = new URL(
     '../../node_modules/langsys-js-typescript/tests/fixtures/canonicalization-reference.json',
     import.meta.url,
 );
-const CORE_FIXTURE_BLOB = 'ed6c35550518af5910e8cb8bd64ff2606e3904d2';
+const CORE_FIXTURE_BLOB = '23b527ce4cf1b06aad7990cc6339e3e1742d0888';
 /** The spec blob the core measured its rows against. */
-const CORE_FIXTURE_SPEC_BLOB = '5d7e6890b733a50fb6f5f5c30e0056c6ef7bcf45';
+const CORE_FIXTURE_SPEC_BLOB = '5f01ef7d761c35157e553ed0ea83b9a4539511c3';
 
 const phpPresent = existsSync(PHP_FIXTURE);
 const corePresent = existsSync(CORE_FIXTURE);

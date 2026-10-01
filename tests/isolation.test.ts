@@ -19,6 +19,14 @@ const CATALOGS: Record<string, Catalog> = {
     de: { __uncategorized__: { Hello: 'Hallo', Goodbye: 'Auf Wiedersehen' } },
     fr: { __uncategorized__: { Hello: 'Bonjour', Goodbye: 'Au revoir' } },
     es: { __uncategorized__: { Hello: 'Hola', Goodbye: 'Adiós' } },
+    // The base locale holds only what Langsys promoted: a flat source phrase whose
+    // English needs a plural. Unpromoted phrases are absent and render as written.
+    en: {
+        __uncategorized__: {
+            'You have {count} new messages.':
+                '{count, plural, one {You have # new message.} other {You have # new messages.}}',
+        },
+    },
 };
 
 /** A fetch stub with a settable delay, so slow and fast locales can be interleaved. */
@@ -185,12 +193,30 @@ describe('catalog fetching', () => {
         expect(translationCalls).toHaveLength(1);
     });
 
-    it('does not fetch a catalog for the base locale', async () => {
+    it('fetches the base-locale catalog, so a promoted plural renders in the base language', async () => {
         const { langsys, calls } = server();
-        const res = await langsys.run({ locale: 'en' }, () => t('Hello'));
+        const one = await langsys.run({ locale: 'en' }, () => t('You have {count} new messages.', { count: 1 }));
+        const many = await langsys.run({ locale: 'en' }, () => t('You have {count} new messages.', { count: 3 }));
 
+        // The flat source alone renders "You have 1 new messages." — the defect.
+        expect(one.value).toBe('You have 1 new message.');
+        expect(many.value).toBe('You have 3 new messages.');
+        // One fetch, then the memo: the base locale is cached like any other.
+        const fetched = calls.filter((c) => c.includes('/translations'));
+        expect(fetched).toHaveLength(1);
+        expect(new URL(fetched[0]).searchParams.get('locale')).toBe('en');
+    });
+
+    it('renders an unpromoted base-locale phrase as written', async () => {
+        const { langsys } = server();
+        const res = await langsys.run({ locale: 'en' }, () => t('Hello'));
         expect(res.value).toBe('Hello');
-        expect(calls.filter((c) => c.includes('/translations'))).toHaveLength(0);
+    });
+
+    it('preloads the base-locale catalog for hand-off to the client', async () => {
+        const { langsys } = server();
+        const catalog = await langsys.preloadCatalog('en');
+        expect(catalog.__uncategorized__?.['You have {count} new messages.']).toContain('plural');
     });
 
     it('does not queue misses in the base locale', async () => {
@@ -223,6 +249,24 @@ describe('catalog fetching', () => {
         // Degrades to base language rather than throwing...
         expect(res.value).toBe('Hello');
         // ...but is NOT silent about it. A silent fallback here is the original defect.
+        expect(errors).toHaveBeenCalled();
+        errors.mockRestore();
+    });
+
+    it('renders the source phrase when the base-locale catalog fetch fails', async () => {
+        // Fetching the base locale must not make it depend on the API: an outage costs
+        // the promoted plurals, never the page.
+        const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const failing = (async (url: string | URL) =>
+            String(url).includes('authorize-project')
+                ? new Response(JSON.stringify({ status: true, data: { key_type: 'read' } }), { status: 200 })
+                : new Response('nope', { status: 500 })) as unknown as typeof globalThis.fetch;
+
+        const langsys = createLangsysServer({ projectId: 'p', apiKey: 'k', baseLocale: 'en', fetch: failing });
+        const res = await langsys.run({ locale: 'en' }, () => t('You have {count} new messages.', { count: 3 }));
+
+        expect(res.value).toBe('You have 3 new messages.');
+        expect(res.missing).toEqual([]);
         expect(errors).toHaveBeenCalled();
         errors.mockRestore();
     });

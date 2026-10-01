@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- The base locale now renders the plural forms Langsys adds to flat source phrases.
+  `run()` and `preloadCatalog()` skipped the base-locale catalog, so `You have {count} new
+  messages.` rendered "You have 1 new messages." in the source language, and disagreed
+  with the client SDK, which fetches the base locale. The catalog is now fetched and
+  cached like any other locale. Base-locale misses are still never harvested, and a
+  failed fetch still renders phrases as written.
+
 ## 0.1.0 - 2026-08-22
 
 First release. Request-scoped `t()` that renders translated, crawler-visible HTML during

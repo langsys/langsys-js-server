@@ -198,16 +198,14 @@ export class LangsysServer {
 
         await this.ensureAuthorized();
 
+        // The base locale is fetched like any other. Langsys stores a base-locale entry
+        // when it promotes a flat source phrase to ICU — "You have {count} new messages."
+        // gains a plural so English renders "1 new message" — and that entry exists only
+        // in the catalog. Skipping the fetch rendered the flat source, "1 new messages",
+        // and disagreed with the client SDK, which fetches the base locale too.
         const catalog = options.catalog
             ? normalizeCatalog(options.catalog)
-            : locale === this.baseLocale
-              ? // The base locale has no catalog to fetch: phrases are already written in
-                // it. Fetching would be a round-trip for an empty result. Still normalized,
-                // so `RenderResult.catalog` has the same shape on every path — a client SDK
-                // seeding from a base-locale render must not receive a differently-shaped
-                // object than one seeding from `/it`.
-                normalizeCatalog({})
-              : await this.catalogs.get(locale);
+            : await this.catalogs.get(locale);
 
         const scope: RequestScope = {
             locale,
@@ -278,9 +276,7 @@ export class LangsysServer {
      * object, so this costs one fetch, not two.
      */
     async preloadCatalog(locale: string): Promise<Catalog> {
-        const canonical = canonicalizeLocale(locale);
-        if (canonical === this.baseLocale) return normalizeCatalog({});
-        return this.catalogs.get(canonical);
+        return this.catalogs.get(canonicalizeLocale(locale));
     }
 
     /** Drop a locale's cached catalog across every worker sharing the configured cache. */

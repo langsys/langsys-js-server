@@ -19,7 +19,10 @@ export type KeyType = 'read' | 'write' | 'unknown';
 export interface LangsysServerConfig {
     projectId: string | number;
     apiKey: string;
-    /** The language your source phrases are written in. Never fetched or harvested. */
+    /**
+     * The language your source phrases are written in. Never harvested. Its catalog is
+     * fetched for the plural forms Langsys adds to flat source phrases.
+     */
     baseLocale: string;
     apiUrl?: string;
     debug?: boolean;

@@ -81,8 +81,8 @@ export const t: TFunction = (
 
     if (!hit && scope.locale !== scope.baseLocale) {
         // A miss in the BASE locale is not a miss — the phrase is already in the base
-        // language and there is nothing to look up. Queueing those would register every
-        // phrase on every base-locale render.
+        // language, and the base catalog holds only promoted (ICU) entries. Queueing
+        // those would register every phrase on every base-locale render.
         queueMiss(scope, phrase, category);
     }
 

@@ -405,7 +405,7 @@ createLangsysServer({ projectId, apiKey, baseLocale, /* ... */ })
 |---|---|---|---|
 | `projectId` | `string \| number` | **required** | Langsys project |
 | `apiKey` | `string` | **required** | Read-only in production; write in development |
-| `baseLocale` | `string` | **required** | The language your source phrases are written in. Never fetched or harvested. |
+| `baseLocale` | `string` | **required** | The language your source phrases are written in. Never harvested. Its catalog is fetched for the plural forms Langsys adds to flat source phrases; a failed fetch renders phrases as written. |
 | `apiUrl` | `string` | `https://api.langsys.dev/api` | Override the API host |
 | `debug` | `boolean` | `false` | Enables `log()` output. Warnings and errors are **always** emitted. |
 | `catalogTtlSeconds` | `number` | `300` | Catalog freshness. Also the TTL written into the shared cache. |
